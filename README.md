@@ -178,12 +178,3 @@ tail -f logs/main.log
 # 성능 로그  
 tail -f logs/performance.log
 ```
-
-## 기여 방법
-1. Fork 저장소
-2. 기능 브랜치 생성
-3. 변경사항 커밋
-4. Pull Request 생성
-
-## 라이선스
-MIT License
