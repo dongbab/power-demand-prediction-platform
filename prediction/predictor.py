@@ -6,7 +6,6 @@ from data.loader import ChargingDataLoader
 
 
 class RealTimePowerPredictor:
-    """실제 데이터 기반 실시간 전력 예측기"""
     
     def __init__(self, station_id: str):
         self.station_id = station_id
@@ -237,8 +236,6 @@ class RealTimePowerPredictor:
             "note": "실제 데이터 부족으로 보수적 추정"
         }
 
-
-# main.py의 API 엔드포인트도 업데이트
 async def get_enhanced_prediction(station_id: str):
     """향상된 예측 API"""
     predictor = RealTimePowerPredictor(station_id)
@@ -270,7 +267,7 @@ async def test_real_data_prediction():
     """실제 데이터 기반 예측 테스트"""
     print("=== 실제 데이터 기반 예측 테스트 ===")
     
-    predictor = RealTimePowerPredictor("BNS0791")
+    predictor = RealTimePowerPredictor("BNS0026")
     
     # 1. 실시간 예측
     print("\n1. 다음 1시간 예측:")
@@ -289,7 +286,7 @@ async def test_real_data_prediction():
     
     # 3. 종합 분석
     print("\n3. 종합 분석:")
-    enhanced = await get_enhanced_prediction("BNS0791")
+    enhanced = await get_enhanced_prediction("BNS0026")
     summary = enhanced['summary']
     for key, value in summary.items():
         print(f"   {key}: {value}")

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <title>⚡ {{ station_info.name }} - 전력 예측 대시보드</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ 순간 최고 전력 예측 시스템</h1>
+            <div class="station-selector-link">
+                <a href="/station-selector" class="btn-back">← 충전소 선택</a>
+            </div>
+        </div>
+        
+        <div class="station-info">
+            <h2>🏢 {{ station_info.name }}</h2>
+            <p>
+                <span class="status-indicator status-online"></span>온라인 상태 | 
+                충전기 타입: {{ station_info.charger_type }} | 
+                커넥터: {{ station_info.connector_type }} | 
+                이용률: <span id="station-utilization">-</span>%
+            </p>
+            <p class="station-location">📍 {{ station_info.location }}</p>
+        </div>
+        
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <h3>현재 예측 전력</h3>
+                <div class="metric-value power" id="current-power">-</div>
+                <div class="metric-unit">kW</div>
+            </div>
+            <div class="metric-card">
+                <h3>권고 계약 전력</h3>
+                <div class="metric-value contract" id="contract-power">-</div>
+                <div class="metric-unit">kW</div>
+            </div>
+            <div class="metric-card">
+                <h3>충전기 이용률</h3>
+                <div class="metric-value utilization" id="utilization-rate">-</div>
+                <div class="metric-unit">%</div>
+            </div>
+            <div class="metric-card">
+                <h3>분석 세션</h3>
+                <div class="metric-value sessions" id="session-count">-</div>
+                <div class="metric-unit">개</div>
+            </div>
+        </div>
+        
+        <div class="charts-grid">
+            <div class="chart-card">
+                <h3>📊 시간대별 전력 패턴 (24시간)</h3>
+                <div class="chart-container">
+                    <canvas id="hourlyChart"></canvas>
+                </div>
+            </div>
+            <div class="chart-card">
+                <h3>📈 전력 분포 (100kW 기준)</h3>
+                <div class="chart-container">
+                    <canvas id="distributionChart"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <div class="charts-grid">
+            <div class="chart-card">
+                <h3>📅 월별 예측 트렌드 (계절성 반영)</h3>
+                <div class="chart-container">
+                    <canvas id="monthlyChart"></canvas>
+                </div>
+            </div>
+            <div class="chart-card">
+                <h3>⚡ SOC vs 전력 관계</h3>
+                <div class="chart-container">
+                    <canvas id="socChart"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <div class="control-panel">
+            <h3>🔧 API 테스트 및 분석</h3>
+            <div class="button-group">
+                <button class="btn" onclick="refreshDashboard()">
+                    <span id="refresh-icon">🔄</span> 대시보드 새로고침
+                </button>
+                <button class="btn" onclick="testRealtime()">📡 실시간 예측</button>
+                <button class="btn" onclick="testMonthly()">📅 월별 계약 권고</button>
+                <button class="btn" onclick="testAnalysis()">📊 상세 분석</button>
+                <button class="btn" onclick="exportData()">💾 데이터 내보내기</button>
+            </div>
+            
+            <div class="alert alert-info">
+                <strong>💡 100kW 급속충전기:</strong> 현재 평균 <span id="avg-power">-</span>kW 이용 중 (<span id="current-utilization">-</span>% 이용률). 최대 <span id="max-power">-</span>kW 기록.
+            </div>
+            
+            <div id="results" class="results-panel" style="display: none;">
+                <h4>분석 결과</h4>
+                <pre id="results-content"></pre>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 현재 충전소 ID를 JavaScript에서 사용할 수 있도록 전달 -->
+    <script>
+        // 템플릿에서 JavaScript로 데이터 전달 (VS Code 오류 방지)
+        window.CURRENT_STATION_ID = "{{ station_id }}";
+        
+        // JSON 데이터를 안전하게 파싱
+        try {
+            window.STATION_INFO = JSON.parse('{{ station_info | tojson | safe }}');
+        } catch (e) {
+            console.error('충전소 정보 파싱 오류:', e);
+            window.STATION_INFO = {
+                id: "{{ station_id }}",
+                name: "{{ station_info.name | default('기본 충전소') }}",
+                location: "{{ station_info.location | default('위치 정보 없음') }}",
+                charger_type: "{{ station_info.charger_type | default('100kW 급속충전기') }}",
+                connector_type: "{{ station_info.connector_type | default('DC콤보') }}"
+            };
+        }
+        
+        // 데이터 유효성 검사
+        if (!window.CURRENT_STATION_ID) {
+            console.error('충전소 ID가 설정되지 않았습니다');
+            window.CURRENT_STATION_ID = 'BNS0260'; // 기본값
+        }
+        
+        if (!window.STATION_INFO) {
+            console.error('충전소 정보가 설정되지 않았습니다');
+            window.STATION_INFO = {
+                id: window.CURRENT_STATION_ID,
+                name: '기본 충전소',
+                location: '위치 정보 없음',
+                charger_type: '100kW 급속충전기',
+                connector_type: 'DC콤보'
+            };
+        }
+        
+        console.log('충전소 데이터 초기화:', {
+            station_id: window.CURRENT_STATION_ID,
+            station_info: window.STATION_INFO
+        });
+    </script>
+    
+    <!-- 인라인 스타일 제거 -->
+    <div id="results" class="results-panel hidden">
+        <h4>분석 결과</h4>
+        <pre id="results-content"></pre>
+    </div>
+    
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

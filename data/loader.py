@@ -169,79 +169,7 @@ class ChargingDataLoader:
         print(f"데이터 정제 완료: {original_size:,} → {len(df):,}개 ({retention_rate:.1f}% 보존)")
         return df
 
-    # def _generate_sample_data(self, days: int) -> pd.DataFrame:
-    #     print(f"샘플 데이터 생성: {days}일간")
-        
-    #     # 더 현실적인 시간 간격 (2-4시간마다 충전)
-    #     end_date = datetime.now()
-    #     start_date = end_date - timedelta(days=days)
-        
-    #     # 랜덤한 시간 간격으로 충전 세션 생성
-    #     sessions = []
-    #     current_date = start_date
-        
-    #     while current_date < end_date:
-    #         # 2-6시간 간격으로 충전 세션 생성
-    #         interval_hours = np.random.uniform(2, 6)
-    #         current_date += timedelta(hours=interval_hours)
-            
-    #         if current_date < end_date:
-    #             sessions.append(current_date)
-        
-    #     n_sessions = len(sessions)
-    #     print(f"생성된 세션 수: {n_sessions}개")
-
-    #     # 시간대별 전력 패턴 적용
-    #     base_power = []
-    #     for dt in sessions:
-    #         hour = dt.hour
-    #         if 0 <= hour < 6:    # 심야
-    #             base = 25
-    #         elif 6 <= hour < 9:  # 출근시간
-    #             base = 45
-    #         elif 9 <= hour < 12: # 오전
-    #             base = 35
-    #         elif 12 <= hour < 14: # 점심
-    #             base = 40
-    #         elif 14 <= hour < 18: # 오후
-    #             base = 38
-    #         elif 18 <= hour < 21: # 퇴근시간
-    #             base = 50
-    #         else:                # 저녁
-    #             base = 35
-            
-    #         # 랜덤 변동 추가 (±30%)
-    #         power = np.random.normal(base, base * 0.3)
-    #         base_power.append(max(10, min(100, power)))
-
-    #     sample_data = {
-    #         '권역': ['수도권'] * n_sessions,
-    #         '시군구': ['서울시'] * n_sessions,
-    #         '충전소ID': [self.station_id] * n_sessions,
-    #         '충전소명': [f'{self.station_id}_충전소'] * n_sessions,
-    #         '충전소주소': ['서울시 강남구 테헤란로 123'] * n_sessions,
-    #         '운영사명': ['한국전력공사'] * n_sessions,
-    #         '충전기ID': [f'CHG_{i%4+1:02d}' for i in range(n_sessions)],
-    #         '충전기구분': ['급속'] * n_sessions,
-    #         '커넥터명': ['DC콤보'] * n_sessions,
-    #         '충전시작일시': sessions,
-    #         '충전종료일시': [dt + timedelta(minutes=np.random.uniform(30, 120)) for dt in sessions],
-    #         '충전시간': np.random.uniform(30, 120, n_sessions),
-    #         '개인/법인': np.random.choice(['개인', '법인'], n_sessions, p=[0.7, 0.3]),
-    #         '충전량(kWh)': np.random.uniform(15, 60, n_sessions),
-    #         '시작SOC(%)': np.random.uniform(10, 70, n_sessions),
-    #         '완료SOC(%)': np.random.uniform(60, 95, n_sessions),
-    #         '순간최고전력': base_power,
-    #         '순간최고전압': np.random.uniform(380, 420, n_sessions),
-    #         '순간최고전류': np.random.uniform(50, 150, n_sessions),
-    #         '충전단가': [350] * n_sessions,
-    #         '충전금액': np.random.uniform(10000, 35000, n_sessions)
-    #     }
-        
-    #     return pd.DataFrame(sample_data)
-
     def debug_csv_structure(self):
-        """CSV 파일 구조 디버깅"""
         csv_file = "충전이력리스트_급속_202409_202505.csv"
         
         if not os.path.exists(csv_file):
