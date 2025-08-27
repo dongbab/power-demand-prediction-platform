@@ -1,5 +1,13 @@
-# Python
-__pycache__/
+# Project-specific
+*.csv
+logs/
+venv/
+
+# Backend Python
+backend/__pycache__/
+backend/app/__pycache__/
+backend/app/*/__pycache__/
+backend/app/*/*/__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -20,6 +28,15 @@ wheels/
 .installed.cfg
 *.egg
 
+# Frontend Node.js
+frontend/node_modules/
+frontend/build/
+frontend/.svelte-kit/
+frontend/dist/
+frontend/package-lock.json.bak
+frontend/*.tsbuildinfo
+frontend/vite.config.js.timestamp-*
+
 # Virtual Environment
 env/
 venv/
@@ -37,6 +54,11 @@ venv.bak/
 
 # OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
 # Logs
@@ -51,6 +73,9 @@ logs/
 .env
 .env.local
 .env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
 
 # Testing
 .pytest_cache/
@@ -59,12 +84,22 @@ htmlcov/
 .coverage.*
 coverage.xml
 *.cover
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
 # Jupyter
 .ipynb_checkpoints/
 
 # Cache
 .cache/
+
+# Docker
+.dockerignore
+
+# Temporary files
+*.tmp
+*.temp
 
 # Windows
 desktop.ini
