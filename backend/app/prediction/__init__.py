@@ -1,7 +1,6 @@
 """Prediction module for charging station peak power forecasting"""
 
-from .engine import PredictionEngine
-from .service import PredictionService
-from .scheduler import PredictionScheduler
+from .advanced_engine import AdvancedPredictionEngine
+from .stats_extreme import estimate_extremes_from_df
 
-__all__ = ["PredictionEngine", "PredictionService", "PredictionScheduler"]
+__all__ = ["AdvancedPredictionEngine", "estimate_extremes_from_df"]

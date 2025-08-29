@@ -61,7 +61,15 @@
     });
 
     async function loadData() {
-        await stationActions.loadStationData(stationId);
+        try {
+            await stationActions.loadStationData(stationId);
+        } catch (error) {
+            console.error('Failed to load station data:', error);
+            uiActions.showNotification(
+                '데이터 로딩에 실패했습니다. 새로고침을 시도해주세요.',
+                'error'
+            );
+        }
     }
 
     async function refreshDashboard() {
@@ -377,57 +385,72 @@
             {$error}
         </div>
     {:else}
-        <!-- Prediction Update Controls -->
-        <div class="prediction-controls">
-            <div class="controls-header">
-                <h3>📊 실시간 예측 업데이트</h3>
-                <p>전력 예측 데이터를 최신 상태로 갱신합니다</p>
-            </div>
-            <div class="update-buttons">
-                <button
-                    class="update-btn primary"
-                    on:click={refreshDashboard}
-                    disabled={$isRefreshing}
-                >
-                    {#if $isRefreshing}
-                        <LoadingSpinner size="small" />
-                    {:else}
-                        ⚡
-                    {/if}
-                    순간최고전력 예측 갱신
-                </button>
-                <button
-                    class="update-btn secondary"
-                    on:click={refreshDashboard}
-                    disabled={$isRefreshing}
-                >
-                    {#if $isRefreshing}
-                        <LoadingSpinner size="small" />
-                    {:else}
-                        📊
-                    {/if}
-                    전력수요 예측 갱신
-                </button>
-            </div>
-        </div>
-
         <!-- Main Prediction Sections -->
         <div class="prediction-sections">
-            <div class="prediction-section">
-                <PeakPowerPredictor
-                    {stationId}
-                    {prediction}
-                    {analysis}
-                    {monthlyContract}
-                />
+            <!-- 순간최고 전력 예측 박스 -->
+            <div class="prediction-box peak-power-box">
+                <div class="prediction-box-header">
+                    <div class="box-title">
+                        <h2>순간 최고 전력 예측</h2>
+                        <p>계약전력 권고 및 피크 전력 분석</p>
+                    </div>
+                    <button
+                        class="box-refresh-btn primary"
+                        on:click={refreshDashboard}
+                        disabled={$isRefreshing}
+                        title="순간최고전력 예측 갱신"
+                    >
+                        {#if $isRefreshing}
+                            <LoadingSpinner size="small" />
+                        {:else}
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M23 4v6h-6" />
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                            </svg>
+                        {/if}
+                        <span>갱신</span>
+                    </button>
+                </div>
+                <div class="prediction-box-content">
+                    <PeakPowerPredictor
+                        {stationId}
+                        {prediction}
+                        {analysis}
+                        {monthlyContract}
+                    />
+                </div>
             </div>
 
-            <div class="prediction-section">
-                <PowerDemandPredictor
-                    {stationId}
-                    {monthlyContract}
-                    {analysis}
-                />
+            <!-- 에너지 수요 예측 박스 -->
+            <div class="prediction-box energy-demand-box">
+                <div class="prediction-box-header">
+                    <div class="box-title">
+                        <h2>전력량 수요 예측</h2>
+                        <p>전력량 기반 수요 패턴 분석 및 예측</p>
+                    </div>
+                    <button
+                        class="box-refresh-btn secondary"
+                        on:click={refreshDashboard}
+                        disabled={$isRefreshing}
+                        title="에너지 수요 예측 갱신"
+                    >
+                        {#if $isRefreshing}
+                            <LoadingSpinner size="small" />
+                        {:else}
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M23 4v6h-6" />
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                            </svg>
+                        {/if}
+                        <span>갱신</span>
+                    </button>
+                </div>
+                <div class="prediction-box-content">
+                    <PowerDemandPredictor
+                        {stationId}
+                        {analysis}
+                    />
+                </div>
             </div>
         </div>
 
@@ -955,93 +978,119 @@
         font-size: 1em;
     }
 
-    /* Prediction Controls Styles */
-    .prediction-controls {
-        background: linear-gradient(
-            135deg,
-            var(--bg-secondary) 0%,
-            var(--neutral-light) 100%
-        );
-        border-radius: 16px;
-        padding: 24px;
-        margin-bottom: 32px;
-        box-shadow: 0 4px 12px var(--shadow);
-        border: 1px solid var(--border-color);
-        transition: all 0.3s ease;
-    }
 
-    .controls-header {
-        text-align: center;
-        margin-bottom: 24px;
-    }
-
-    .controls-header h3 {
-        margin: 0 0 8px 0;
-        color: var(--primary-color);
-        font-size: 1.3em;
-        font-weight: 700;
-    }
-
-    .controls-header p {
-        margin: 0;
-        color: var(--text-secondary);
-        font-size: 0.95em;
-    }
-
-    .update-buttons {
+    .prediction-sections {
         display: grid;
         grid-template-columns: 1fr;
+        gap: 32px;
+        margin-bottom: 40px;
+    }
+
+    .prediction-box {
+        background: var(--bg-secondary);
+        border-radius: 20px;
+        padding: 0;
+        box-shadow: 0 8px 24px var(--shadow);
+        border: 1px solid var(--border-color);
+        transition: all 0.3s ease;
+        overflow: hidden;
+    }
+
+    .prediction-box:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 32px var(--shadow-hover);
+    }
+
+    .prediction-box-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 24px 32px;
+        border-bottom: 2px solid var(--border-color);
+        gap: 20px;
+    }
+
+    .peak-power-box .prediction-box-header {
+        background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-light) 100%);
+        color: white;
+        border-bottom: none;
+    }
+
+    .energy-demand-box .prediction-box-header {
+        background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+        color: white;
+        border-bottom: none;
+    }
+
+    .box-title h2 {
+        margin: 0 0 8px 0;
+        font-size: 1.5em;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
         gap: 12px;
     }
 
-    .update-btn {
+    .box-title p {
+        margin: 0;
+        opacity: 0.9;
+        font-size: 1em;
+        font-weight: 400;
+    }
+
+    .box-refresh-btn {
         display: flex;
         align-items: center;
-        justify-content: center;
-        gap: 10px;
-        padding: 14px 20px;
+        gap: 8px;
+        padding: 12px 20px;
         border: none;
         border-radius: 12px;
-        font-weight: 600;
-        font-size: 0.95em;
         cursor: pointer;
+        font-weight: 600;
+        font-size: 0.9em;
         transition: all 0.3s ease;
-        min-height: 50px;
+        min-width: 100px;
+        justify-content: center;
     }
 
-    .update-btn.primary {
-        background: var(--gradient-primary);
+    .box-refresh-btn.primary {
+        background: rgba(255, 255, 255, 0.2);
         color: white;
-        box-shadow: 0 4px 15px var(--shadow);
+        border: 1px solid rgba(255, 255, 255, 0.3);
     }
 
-    .update-btn.primary:hover:not(:disabled) {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px var(--shadow-hover);
+    .box-refresh-btn.primary:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.3);
+        border-color: rgba(255, 255, 255, 0.5);
+        transform: scale(1.05);
     }
 
-    .update-btn.secondary {
-        background: var(--gradient-success);
+    .box-refresh-btn.secondary {
+        background: rgba(255, 255, 255, 0.2);
         color: white;
-        box-shadow: 0 4px 15px var(--shadow);
+        border: 1px solid rgba(255, 255, 255, 0.3);
     }
 
-    .update-btn.secondary:hover:not(:disabled) {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px var(--shadow-hover);
+    .box-refresh-btn.secondary:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.3);
+        border-color: rgba(255, 255, 255, 0.5);
+        transform: scale(1.05);
     }
 
-    .update-btn:disabled {
+    .box-refresh-btn:disabled {
         opacity: 0.6;
         cursor: not-allowed;
         transform: none;
     }
 
-    .prediction-sections {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 20px;
-        margin-bottom: 24px;
+    .box-refresh-btn svg {
+        width: 18px;
+        height: 18px;
+        stroke-width: 2;
+    }
+
+    .prediction-box-content {
+        padding: 0;
     }
 
     /* Modern Control Dashboard Styles */
@@ -1527,15 +1576,28 @@
             gap: 16px;
         }
 
-        .update-buttons {
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
+        .prediction-sections {
+            gap: 40px;
+            margin-bottom: 48px;
         }
 
-        .prediction-sections {
-            grid-template-columns: 1fr;
-            gap: 32px;
-            margin-bottom: 32px;
+        .prediction-box-header {
+            padding: 28px 36px;
+            flex-wrap: nowrap;
+        }
+
+        .box-title h2 {
+            font-size: 1.6em;
+        }
+
+        .box-title p {
+            font-size: 1.05em;
+        }
+
+        .box-refresh-btn {
+            padding: 14px 24px;
+            font-size: 1em;
+            min-width: 120px;
         }
 
         .control-panel {
@@ -1601,9 +1663,26 @@
         }
 
         .prediction-sections {
-            grid-template-columns: 1fr;
-            gap: 40px;
-            margin-bottom: 40px;
+            gap: 48px;
+            margin-bottom: 56px;
+        }
+
+        .prediction-box-header {
+            padding: 32px 40px;
+        }
+
+        .box-title h2 {
+            font-size: 1.7em;
+        }
+
+        .box-title p {
+            font-size: 1.1em;
+        }
+
+        .box-refresh-btn {
+            padding: 16px 28px;
+            font-size: 1.05em;
+            min-width: 140px;
         }
 
         .control-panel {
@@ -1623,8 +1702,26 @@
         }
 
         .prediction-sections {
-            grid-template-columns: 1fr;
-            gap: 48px;
+            gap: 56px;
+            margin-bottom: 64px;
+        }
+
+        .prediction-box {
+            border-radius: 24px;
+        }
+
+        .prediction-box-header {
+            padding: 36px 44px;
+        }
+
+        .box-title h2 {
+            font-size: 1.8em;
+        }
+
+        .box-refresh-btn {
+            padding: 18px 32px;
+            font-size: 1.1em;
+            min-width: 160px;
         }
     }
 

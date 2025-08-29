@@ -1,5 +1,5 @@
 <script>
-	import { onMount, afterUpdate } from 'svelte';
+	import { onMount, afterUpdate, onDestroy } from 'svelte';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { stations, isLoading, isLoadingMore, error, stationActions, pagination, requiresUpload, hasData } from '../stores/stationStore.ts';
@@ -28,25 +28,32 @@
 	
 	function setupInfiniteScroll() {
 		const handleScroll = () => {
-			if (!scrollContainer) return;
-			
-			const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
-			const nearBottom = scrollTop + clientHeight >= scrollHeight - 200; // 200px before bottom
+			// 메인 네비게이션 스크롤 사용
+			const { scrollTop, scrollHeight, clientHeight } = document.documentElement;
+			const nearBottom = scrollTop + clientHeight >= scrollHeight - 300; // 300px 여유
 			
 			if (nearBottom && !$isLoadingMore && $pagination.hasNext) {
 				stationActions.loadMore();
 			}
 		};
 
-		if (scrollContainer) {
-			scrollContainer.addEventListener('scroll', handleScroll);
-			return () => scrollContainer.removeEventListener('scroll', handleScroll);
-		}
+		// 전체 페이지 스크롤에 이벤트 리스너 추가
+		window.addEventListener('scroll', handleScroll, { passive: true });
+		return () => window.removeEventListener('scroll', handleScroll);
 	}
 	
+	// 마운트 시 한 번만 스크롤 이벤트 설정
+	let scrollCleanup;
+	
 	afterUpdate(() => {
-		if (scrollContainer && !scrollContainer.onscroll) {
-			setupInfiniteScroll();
+		if (!scrollCleanup) {
+			scrollCleanup = setupInfiniteScroll();
+		}
+	});
+	
+	onDestroy(() => {
+		if (scrollCleanup) {
+			scrollCleanup();
 		}
 	});
 	
@@ -195,7 +202,7 @@
                     <div class="stat-metric">세션</div>
                 </div>
                 <div class="stat-content">
-                    <div class="stat-value">{totalSessions.toLocaleString()}</div>
+                    <div class="stat-value">{(totalSessions || 0).toLocaleString()}</div>
                     <div class="stat-label">총 충전 세션</div>
                 </div>
                 <div class="stat-footer">
@@ -333,10 +340,9 @@
 			</div>
 		</div>
 	{:else}
-		<div class="scroll-container" bind:this={scrollContainer}>
-			<div class="station-grid">
-				{#each $stations as station (station.id)}
-					<div class="station-card">
+		<div class="station-grid" bind:this={scrollContainer}>
+			{#each $stations as station (station.id)}
+				<div class="station-card">
 						<div class="station-identity">
 							<h3 class="station-name" title="{station.name}">{station.name}</h3>
 							<div class="station-id">{station.id}</div>
@@ -402,8 +408,7 @@
 							</div>
 						</div>
 					</div>
-				{/each}
-			</div>
+			{/each}
 			
 			{#if $isLoadingMore}
 				<div class="loading-more">
@@ -412,7 +417,7 @@
 				</div>
 			{:else if !$pagination.hasNext && $stations.length > 0}
 				<div class="end-message">
-					<p>모든 충전소를 불러왔습니다 (총 {$pagination.total}개소)</p>
+					<p>총 {$pagination.total}개소의 충전소가 로드되었습니다.</p>
 				</div>
 			{/if}
 		</div>
@@ -801,7 +806,33 @@
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
 		gap: 20px;
-		padding: 0;
+		padding: 20px 0;
+		margin-bottom: 40px;
+	}
+	
+	/* 로딩 및 종료 메시지 스타일 */
+	.loading-more,
+	.end-message {
+		grid-column: 1 / -1;
+		text-align: center;
+		padding: 40px 20px;
+		margin-top: 20px;
+	}
+	
+	.loading-more {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 16px;
+		color: var(--text-muted);
+	}
+	
+	.end-message {
+		background: var(--neutral-light);
+		border-radius: 12px;
+		border: 1px solid var(--border-color);
+		color: var(--text-secondary);
+		font-weight: 500;
 	}
 	
 	.station-card {

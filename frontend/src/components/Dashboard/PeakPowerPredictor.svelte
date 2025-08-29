@@ -1,12 +1,13 @@
 <script>
     import { onMount, onDestroy } from 'svelte';
     import { Chart, registerables } from 'chart.js';
+    import zoomPlugin from 'chartjs-plugin-zoom';
     import 'chartjs-adapter-date-fns';
     import MetricCard from './MetricCard.svelte';
     import LoadingSpinner from '../LoadingSpinner.svelte';
 
-    // Chart.js 등록
-    Chart.register(...registerables);
+    // Chart.js 등록 (zoom 플러그인 포함)
+    Chart.register(...registerables, zoomPlugin);
 
     export let stationId;
     export let prediction = null;
@@ -25,7 +26,9 @@
     let metrics = {
         lastMonthPeak: 0,
         nextMonthRecommended: 0,
-        confidence: 0
+        confidence: 0,
+        algorithmPrediction: 0,
+        predictionExceedsLimit: false
     };
     let dataInfo = {
         startDate: null,
@@ -65,18 +68,64 @@
             const result = await response.json();
             
             if (result.success) {
+                console.log('API response received:', result);
+                
                 // 백엔드에서 전처리된 데이터 직접 사용
                 chartData = result.chart_data || [];
+                // monthlyContract props에서 권고계약 전력 가져오기 (더 정확함)
+                const contractRecommendation = monthlyContract?.recommended_contract_kw || result.recommended_contract_kw || 0;
+                
+                // 알고리즘 예측값은 여러 소스에서 가져올 수 있음
+                const algorithmPredictionFromApi = result.algorithm_prediction_kw;
+                const algorithmPredictionFromMonthly = monthlyContract?.algorithm_prediction_kw;
+                const finalAlgorithmPrediction = algorithmPredictionFromApi || algorithmPredictionFromMonthly || contractRecommendation;
+                
+                // 제한 초과 여부도 여러 소스에서 확인
+                const exceedsLimitFromApi = result.prediction_exceeds_limit;
+                const exceedsLimitFromMonthly = monthlyContract?.prediction_exceeds_limit;
+                const finalExceedsLimit = exceedsLimitFromApi || exceedsLimitFromMonthly || false;
+                
                 metrics = {
-                    lastMonthPeak: Math.round(result.last_month_peak || 0),
-                    nextMonthRecommended: Math.round(result.recommended_contract_kw || 0),
-                    confidence: Math.max(0, Math.min(1, result.confidence || 0))
+                    lastMonthPeak: Math.round(result.last_month_peak || result.current_peak || 0),
+                    nextMonthRecommended: Math.round(contractRecommendation),
+                    confidence: Math.max(0, Math.min(1, result.confidence || 0)),
+                    algorithmPrediction: Math.round(finalAlgorithmPrediction),
+                    predictionExceedsLimit: finalExceedsLimit
                 };
+                
+                console.log('Algorithm prediction sources:', {
+                    fromApi: algorithmPredictionFromApi,
+                    fromMonthly: algorithmPredictionFromMonthly,
+                    final: finalAlgorithmPrediction,
+                    exceedsFromApi: exceedsLimitFromApi,
+                    exceedsFromMonthly: exceedsLimitFromMonthly,
+                    finalExceeds: finalExceedsLimit
+                });
+                
+                console.log('Contract recommendation sources:', {
+                    fromMonthlyContract: monthlyContract?.recommended_contract_kw,
+                    fromPrediction: result.recommended_contract_kw,
+                    finalValue: contractRecommendation,
+                    algorithmPrediction: result.algorithm_prediction_kw,
+                    algorithmPredictionType: typeof result.algorithm_prediction_kw,
+                    exceedsLimit: result.prediction_exceeds_limit
+                });
+                
+                console.log('Raw API result keys:', Object.keys(result));
+                console.log('Algorithm prediction debug:', {
+                    raw: result.algorithm_prediction_kw,
+                    rounded: Math.round(result.algorithm_prediction_kw || contractRecommendation),
+                    fallback: contractRecommendation,
+                    usingFallback: !result.algorithm_prediction_kw
+                });
                 dataInfo = {
                     startDate: result.data_start_date ? new Date(result.data_start_date) : null,
                     endDate: result.data_end_date ? new Date(result.data_end_date) : null,
                     recordCount: result.record_count || 0
                 };
+                
+                console.log('Processed metrics:', metrics);
+                console.log('Chart data length:', chartData.length);
                 
                 // 고급 모델 결과 처리
                 if (result.advanced_prediction) {
@@ -84,6 +133,7 @@
                     visualizationData = result.visualization_data;
                     modelComparisons = result.advanced_prediction.models || [];
                     console.log(`고급 모델 ${advancedPrediction.model_count}개 사용, 최종 예측: ${advancedPrediction.final_prediction}kW`);
+                    console.log('Visualization data:', visualizationData);
                 }
                 
                 // DOM이 업데이트될 때까지 기다린 후 차트 생성
@@ -106,7 +156,12 @@
         }
     }
 
-
+    function resetZoom() {
+        if (chartInstance) {
+            chartInstance.resetZoom();
+            console.log('Chart zoom reset');
+        }
+    }
 
     function createChart() {
         console.log('createChart called - canvas:', !!chartCanvas, 'data length:', chartData.length);
@@ -124,9 +179,10 @@
             chartInstance.destroy();
         }
 
-        // 데이터가 없을 때 빈 차트 생성
+        // 데이터가 없으면 차트 생성하지 않음
         if (!chartData.length) {
-            console.warn('데이터가 없어 빈 차트를 생성합니다');
+            console.warn('데이터가 없어 차트를 생성하지 않습니다');
+            return;
         }
 
         const ctx = chartCanvas.getContext('2d');
@@ -187,18 +243,6 @@
                         intersect: false
                     },
                     plugins: {
-                        title: {
-                            display: true,
-                            text: '월별 최대 순간최고전력',
-                            font: {
-                                size: 20,
-                                weight: 'bold'
-                            },
-                            padding: {
-                                top: 10,
-                                bottom: 30
-                            }
-                        },
                         legend: {
                             display: true,
                             position: 'top',
@@ -224,12 +268,38 @@
                                     return `${context.dataset.label}: ${context.parsed.y.toFixed(1)}kW`;
                                 }
                             }
+                        },
+                        zoom: {
+                            limits: {
+                                x: {min: 'original', max: 'original'},
+                                y: {min: 'original', max: 'original'}
+                            },
+                            pan: {
+                                enabled: true,
+                                mode: 'xy',
+                                onPanComplete({chart}) {
+                                    console.log('Pan completed');
+                                }
+                            },
+                            zoom: {
+                                wheel: {
+                                    enabled: true,
+                                    speed: 0.1,
+                                },
+                                pinch: {
+                                    enabled: true
+                                },
+                                mode: 'xy',
+                                onZoomComplete({chart}) {
+                                    console.log('Zoom completed');
+                                }
+                            }
                         }
                     },
                     scales: {
                         x: {
                             type: 'category',
-                            labels: chartData.length > 0 ? chartData.map(d => d.label || d.month) : ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+                            labels: chartData.length > 0 ? chartData.map(d => d.label || d.month) : [],
                             title: {
                                 display: true,
                                 text: '월별',
@@ -292,7 +362,7 @@
 
 <div class="peak-predictor">
     <div class="section-header">
-        <h2>⚡ 순간 최고 전력 예측</h2>
+        <h2>순간 최고 전력 예측</h2>
         <div class="last-updated">
             {#if isLoading}
                 <LoadingSpinner size="small" />
@@ -303,7 +373,7 @@
         </div>
     </div>
 
-    <!-- 상단 3개 지표 카드 -->
+    <!-- 상단 지표 카드 -->
     <div class="metrics-row">
         <MetricCard
             title="마지막달 최고 전력"
@@ -323,6 +393,15 @@
             unit="%"
             type="confidence"
         />
+        {#if metrics.predictionExceedsLimit}
+            <MetricCard
+                title="알고리즘 예측값"
+                value={metrics.algorithmPrediction}
+                unit="kW"
+                type="algorithm"
+                subtitle="계약전력 제한 초과"
+            />
+        {/if}
     </div>
 
     <!-- 데이터 범위/상태 -->
@@ -335,136 +414,62 @@
                 )}</span
             >
             <span class="sep">·</span>
-            <span>레코드 {dataInfo.recordCount.toLocaleString()}개</span>
+            <span>레코드 {(dataInfo.recordCount || 0).toLocaleString()}개</span>
         {:else}
             <span class="pill warn">데이터 없음</span>
-            <span>기본값으로 표시</span>
+            <span>해당 충전소({stationId}) CSV 데이터 미발견</span>
         {/if}
     </div>
 
     <!-- Chart.js 차트 -->
     <div class="chart-card">
+        <div class="chart-header">
+            <h3>월별 최대 순간최고전력 추이</h3>
+            <div class="chart-controls">
+                <button class="zoom-reset-btn" on:click={resetZoom} title="줌 초기화">
+                    원래대로
+                </button>
+            </div>
+        </div>
         <div class="chart-container">
             <canvas bind:this={chartCanvas}></canvas>
         </div>
-        {#if isLoading || chartData.length === 0}
+        {#if isLoading}
             <div class="loading-placeholder">
                 <LoadingSpinner />
                 <p>차트 데이터 로딩 중...</p>
             </div>
+        {:else if chartData.length === 0}
+            <div class="no-chart-data">
+                <div class="no-data-icon">📊</div>
+                <h4>차트 데이터 없음</h4>
+                <p>해당 충전소({stationId})의 전력 사용 데이터를 불러올 수 없습니다.</p>
+            </div>
         {/if}
     </div>
-
-    <!-- 고급 모델 비교 섹션 -->
-    {#if advancedPrediction && modelComparisons.length > 0}
-        <div class="advanced-models-section">
-            <div class="section-header">
-                <h3>🤖 통계 모델 비교</h3>
-                <button 
-                    class="toggle-button" 
-                    on:click={() => showModelComparison = !showModelComparison}
-                    aria-expanded={showModelComparison}
-                >
-                    {showModelComparison ? '숨기기' : '모델 비교 보기'}
-                </button>
-            </div>
-            
-            <!-- 앙상블 결과 요약 -->
-            <div class="ensemble-summary">
-                <div class="summary-card">
-                    <span class="label">사용된 모델 수</span>
-                    <span class="value">{advancedPrediction.model_count}개</span>
-                </div>
-                <div class="summary-card">
-                    <span class="label">앙상블 방법</span>
-                    <span class="value">{advancedPrediction.ensemble_method}</span>
-                </div>
-                <div class="summary-card">
-                    <span class="label">예측 불확실성</span>
-                    <span class="value">{advancedPrediction.uncertainty.toFixed(1)}kW</span>
-                </div>
-            </div>
-
-            {#if showModelComparison}
-                <!-- 모델별 비교 테이블 -->
-                <div class="models-comparison">
-                    <h4>개별 모델 예측 결과</h4>
-                    <div class="models-table">
-                        <div class="table-header">
-                            <span>모델명</span>
-                            <span>예측값 (kW)</span>
-                            <span>신뢰도</span>
-                            <span>가중치</span>
-                            <span>설명</span>
-                        </div>
-                        {#each modelComparisons as model}
-                            <div class="table-row">
-                                <span class="model-name">{model.name.replace(/_/g, ' ')}</span>
-                                <span class="prediction-value">{model.prediction}</span>
-                                <span class="confidence">
-                                    <div class="confidence-bar">
-                                        <div 
-                                            class="confidence-fill" 
-                                            style="width: {model.confidence * 100}%"
-                                        ></div>
-                                    </div>
-                                    {(model.confidence * 100).toFixed(0)}%
-                                </span>
-                                <span class="weight">
-                                    {(advancedPrediction.model_weights[model.name] * 100).toFixed(1)}%
-                                </span>
-                                <span class="description">{model.method}</span>
-                            </div>
-                        {/each}
-                    </div>
-                </div>
-
-                <!-- 데이터 히스토그램 (가능하면) -->
-                {#if visualizationData && visualizationData.histogram}
-                    <div class="data-histogram">
-                        <h4>원본 데이터 분포</h4>
-                        <div class="histogram-info">
-                            <div class="stat-item">
-                                <span>평균:</span> 
-                                <span>{visualizationData.statistics.mean?.toFixed(1)}kW</span>
-                            </div>
-                            <div class="stat-item">
-                                <span>최대:</span> 
-                                <span>{visualizationData.statistics.max?.toFixed(1)}kW</span>
-                            </div>
-                            <div class="stat-item">
-                                <span>95%ile:</span> 
-                                <span>{visualizationData.statistics.percentile_95?.toFixed(1)}kW</span>
-                            </div>
-                            <div class="stat-item">
-                                <span>99%ile:</span> 
-                                <span>{visualizationData.statistics.percentile_99?.toFixed(1)}kW</span>
-                            </div>
-                        </div>
-                    </div>
-                {/if}
-            {/if}
-        </div>
-    {/if}
 </div>
 
 <style>
     .peak-predictor {
         display: flex;
         flex-direction: column;
-        gap: 16px;
+        gap: 24px;
+        padding: 24px;
+        background: transparent;
     }
 
     .section-header {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 12px;
+        justify-content: flex-end;
+        gap: 16px;
+        margin-bottom: 20px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--border-color);
     }
 
     .section-header h2 {
-        margin: 0;
-        font-size: 1.2rem;
+        display: none;
     }
 
     .last-updated {
@@ -527,6 +532,53 @@
         min-height: 400px;
     }
 
+    .chart-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    .chart-header h3 {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .chart-controls {
+        display: flex;
+        gap: 8px;
+    }
+
+    .zoom-reset-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 12px;
+        background: var(--primary-color);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .zoom-reset-btn:hover {
+        background: var(--primary-dark);
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px var(--shadow);
+    }
+
+    .zoom-reset-btn svg {
+        width: 16px;
+        height: 16px;
+    }
+
     .chart-container {
         position: relative;
         height: 400px;
@@ -540,6 +592,34 @@
         color: var(--text-secondary);
         font-size: 0.95rem;
         min-height: 300px;
+    }
+    
+    .no-chart-data {
+        display: grid;
+        place-items: center;
+        padding: 60px 24px;
+        text-align: center;
+        min-height: 300px;
+    }
+    
+    .no-chart-data .no-data-icon {
+        font-size: 2.5em;
+        margin-bottom: 12px;
+        opacity: 0.6;
+    }
+    
+    .no-chart-data h4 {
+        margin: 0 0 8px 0;
+        color: var(--text-primary);
+        font-size: 1.1em;
+        font-weight: 600;
+    }
+    
+    .no-chart-data p {
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 0.9em;
+        line-height: 1.4;
     }
 
     @media (min-width: 768px) {

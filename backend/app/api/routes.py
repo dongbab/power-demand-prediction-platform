@@ -546,6 +546,18 @@ async def get_station_prediction(station_id: str):
         return {"success": False, "error": str(e), "station_id": station_id}
 
 
+@api_router.get("/stations/{station_id}/energy-demand-forecast")
+async def get_energy_demand_forecast(station_id: str, days: int = 90):
+    """에너지 수요 예측 - kWh 기반 분석"""
+    try:
+        station_service = get_station_service()
+        return station_service.get_energy_demand_forecast(station_id, days)
+
+    except Exception as e:
+        logger.error(f"Error getting energy demand forecast for {station_id}: {e}", exc_info=True)
+        return {"success": False, "error": str(e), "station_id": station_id}
+
+
 @api_router.get("/stations/{station_id}/monthly-contract")
 async def get_monthly_contract_recommendation(
     station_id: str,

@@ -6,16 +6,15 @@ import numpy as np
 from datetime import datetime, timedelta
 from calendar import monthrange
 
-from .base import BaseModel
 from .entities import PredictionResult, ContractRecommendation
 from .validators import ChargingDataValidator
 
 
-class StatisticalPredictor(BaseModel):
+class StatisticalPredictor:
     """Statistical-based power prediction model"""
 
     def __init__(self, station_id: str):
-        super().__init__(station_id)
+        self.station_id = station_id
         self.validator = ChargingDataValidator()
         self._hourly_profiles: Optional[Dict] = None
         self._seasonal_factors: Optional[Dict[int, float]] = None

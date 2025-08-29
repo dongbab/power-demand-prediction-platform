@@ -1,13 +1,21 @@
 <script>
 	import { onMount, onDestroy } from 'svelte';
 	import { Chart, registerables } from 'chart.js';
+	import zoomPlugin from 'chartjs-plugin-zoom';
 	
-	Chart.register(...registerables);
+	Chart.register(...registerables, zoomPlugin);
 	
 	export let data = [];
 	
 	let canvas;
 	let chart;
+	
+	export function resetZoom() {
+		if (chart) {
+			chart.resetZoom();
+			console.log('Monthly chart zoom reset');
+		}
+	}
 	
 	onMount(() => {
 		initChart();
@@ -61,6 +69,26 @@
 								return `${context.label}: ${context.parsed.y.toFixed(1)}kW`;
 							}
 						}
+					},
+					zoom: {
+						limits: {
+							x: {min: 'original', max: 'original'},
+							y: {min: 'original', max: 'original'}
+						},
+						pan: {
+							enabled: true,
+							mode: 'xy'
+						},
+						zoom: {
+							wheel: {
+								enabled: true,
+								speed: 0.1
+							},
+							pinch: {
+								enabled: true
+							},
+							mode: 'xy'
+						}
 					}
 				},
 				scales: {
@@ -109,14 +137,73 @@
 	}
 </script>
 
-<div class="chart-container">
-	<canvas bind:this={canvas}></canvas>
+<div class="chart-wrapper">
+	<div class="chart-header">
+		<h4>월별 전력 사용량</h4>
+		<button class="zoom-reset-btn" on:click={resetZoom} title="줌 초기화">
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+				<polyline points="9,22 9,12 15,12 15,22"/>
+			</svg>
+			리셋
+		</button>
+	</div>
+	<div class="chart-container">
+		<canvas bind:this={canvas}></canvas>
+	</div>
 </div>
 
 <style>
+	.chart-wrapper {
+		background: var(--bg-secondary);
+		border: 1px solid var(--border-color);
+		border-radius: 12px;
+		padding: 16px;
+	}
+
+	.chart-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 16px;
+		padding-bottom: 8px;
+		border-bottom: 1px solid var(--border-color);
+	}
+
+	.chart-header h4 {
+		margin: 0;
+		font-size: 1rem;
+		font-weight: 600;
+		color: var(--text-primary);
+	}
+
+	.zoom-reset-btn {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 6px 10px;
+		background: var(--primary-color);
+		color: white;
+		border: none;
+		border-radius: 6px;
+		font-size: 0.8rem;
+		font-weight: 500;
+		cursor: pointer;
+		transition: all 0.2s ease;
+	}
+
+	.zoom-reset-btn:hover {
+		background: var(--primary-dark);
+		transform: translateY(-1px);
+	}
+
+	.zoom-reset-btn svg {
+		width: 14px;
+		height: 14px;
+	}
+
 	.chart-container {
 		position: relative;
 		height: 300px;
-		margin-top: 20px;
 	}
 </style>

@@ -5,6 +5,7 @@
 	export let value;
 	export let unit = '';
 	export let type = 'default';
+	export let subtitle = '';
 	
 	let displayValue = 0;
 	let element;
@@ -44,12 +45,15 @@
 	}
 </script>
 
-<div class="metric-card" bind:this={element}>
+<div class="metric-card {type}" bind:this={element}>
 	<h3>{title}</h3>
 	<div class="metric-value {type}">
 		{displayValue.toFixed(type === 'sessions' ? 0 : 1)}
 	</div>
 	<div class="metric-unit">{unit}</div>
+	{#if subtitle}
+		<div class="metric-subtitle">{subtitle}</div>
+	{/if}
 </div>
 
 <style>
@@ -62,6 +66,12 @@
 		text-align: center;
 		transition: all 0.3s ease;
 		color: var(--text-primary, #333);
+	}
+	
+	/* 알고리즘 예측 카드 특별 스타일 */
+	.metric-card.algorithm {
+		border-color: var(--metric-algorithm, #8b5cf6);
+		background: linear-gradient(135deg, var(--bg-secondary, white) 0%, rgba(139, 92, 246, 0.05) 100%);
 	}
 	
 	.metric-card:hover {
@@ -101,6 +111,21 @@
 	.metric-value.confidence { 
 		color: var(--metric-confidence, #f59e0b); 
 	}
+	.metric-value.algorithm { 
+		color: var(--metric-algorithm, #8b5cf6); 
+	}
+	.metric-value.energy { 
+		color: var(--metric-energy, #10b981); 
+	}
+	.metric-value.total { 
+		color: var(--metric-total, #3b82f6); 
+	}
+	.metric-value.growth { 
+		color: var(--metric-growth, #f59e0b); 
+	}
+	.metric-value.peak { 
+		color: var(--metric-peak, #ef4444); 
+	}
 	.metric-value.default { 
 		color: var(--metric-default, #667eea); 
 	}
@@ -112,10 +137,22 @@
 		margin: 0;
 		transition: color 0.3s ease;
 	}
+	
+	.metric-subtitle {
+		color: var(--text-tertiary, #999);
+		font-size: 0.75em;
+		font-weight: 400;
+		margin-top: 8px;
+		padding: 4px 8px;
+		background: var(--bg-tertiary, rgba(0, 0, 0, 0.05));
+		border-radius: 12px;
+		display: inline-block;
+	}
 
 	/* 다크모드 전용 스타일 */
 	:global([data-theme="dark"]) .metric-card {
 		--bg-secondary: #1f2937;
+		--bg-tertiary: rgba(255, 255, 255, 0.05);
 		--border-color: #374151;
 		--shadow: rgba(0, 0, 0, 0.3);
 		--shadow-hover: rgba(0, 0, 0, 0.5);
@@ -130,12 +167,18 @@
 		--metric-utilization: #7dd3fc;
 		--metric-sessions: #86efac;
 		--metric-confidence: #fbbf24;
+		--metric-algorithm: #c084fc;
+		--metric-energy: #86efac;
+		--metric-total: #7dd3fc;
+		--metric-growth: #fbbf24;
+		--metric-peak: #fca5a5;
 		--metric-default: #a78bfa;
 	}
 
 	/* 라이트모드 전용 스타일 */
 	:global([data-theme="light"]) .metric-card {
 		--bg-secondary: #ffffff;
+		--bg-tertiary: rgba(0, 0, 0, 0.05);
 		--border-color: rgba(0, 0, 0, 0.1);
 		--shadow: rgba(0, 0, 0, 0.05);
 		--shadow-hover: rgba(0, 0, 0, 0.15);
@@ -150,6 +193,11 @@
 		--metric-utilization: #3b82f6;
 		--metric-sessions: #10b981;
 		--metric-confidence: #f59e0b;
+		--metric-algorithm: #8b5cf6;
+		--metric-energy: #10b981;
+		--metric-total: #3b82f6;
+		--metric-growth: #f59e0b;
+		--metric-peak: #ef4444;
 		--metric-default: #6366f1;
 	}
 </style>

@@ -53,6 +53,8 @@ export const apiService = {
         api.get(`/station-analysis/${encodeURIComponent(stationId)}`),
     getPrediction: (stationId: string) =>
         api.get(`/stations/${encodeURIComponent(stationId)}/prediction`),
+    getEnergyDemandForecast: (stationId: string, days: number = 90) =>
+        api.get(`/stations/${encodeURIComponent(stationId)}/energy-demand-forecast?days=${days}`),
     getMonthlyContract: (
         stationId: string,
         year: number,

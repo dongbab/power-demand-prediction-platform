@@ -166,8 +166,8 @@ class ChargingDataLoader:
         else:
             csv_files = self.find_csv_files()
             if not csv_files:
-                print("CSV 파일을 찾을 수 없어 샘플 데이터를 생성합니다.")
-                return self._generate_sample_data(days)
+                print("CSV 파일을 찾을 수 없습니다.")
+                return pd.DataFrame()
             if merge_all:
                 dfs = []
                 for f in csv_files:
@@ -175,22 +175,22 @@ class ChargingDataLoader:
                     if not df_i.empty:
                         dfs.append(df_i)
                 if not dfs:
-                    print("읽을 수 있는 CSV가 없어 샘플 데이터를 생성합니다.")
-                    return self._generate_sample_data(days)
+                    print("읽을 수 있는 CSV가 없습니다.")
+                    return pd.DataFrame()
                 df = pd.concat(dfs, ignore_index=True)
             else:
                 # 활성 파일 > 최신 파일 사용
                 target_file = self.get_active_csv_file() or self.get_latest_csv_file()
                 if target_file is None:
-                    print("읽을 수 있는 CSV가 없어 샘플 데이터를 생성합니다.")
-                    return self._generate_sample_data(days)
+                    print("읽을 수 있는 CSV가 없습니다.")
+                    return pd.DataFrame()
                 df = self.load_csv_file(target_file)
 
         try:
             # CSV 파일 로드
             if df.empty:
                 print("CSV 파일이 비어있습니다.")
-                return self._generate_sample_data(days)
+                return pd.DataFrame()
 
             # 데이터 처리 파이프라인
             df = self._normalize_column_names(df)
@@ -209,8 +209,7 @@ class ChargingDataLoader:
 
         except Exception as e:
             print(f"CSV 로딩 중 오류 발생: {e}")
-            print("샘플 데이터를 생성합니다...")
-            return self._generate_sample_data(days)
+            return pd.DataFrame()
 
     def _filter_by_station(self, df: pd.DataFrame) -> pd.DataFrame:
         """충전소별 필터링"""
@@ -224,55 +223,36 @@ class ChargingDataLoader:
 
         if station_col:
             original_count = len(df)
-            df = df[df[station_col] == self.station_id]
-            filtered_count = len(df)
+            # 디버깅: 실제 데이터에서 고유값 확인 (필터링 전)
+            unique_stations = df[station_col].unique()
+            print(f"전체 충전소 수: {len(unique_stations)}")
+            print(f"사용 가능한 충전소 ID (처음 10개): {list(unique_stations[:10])}")
+            
+            # 실제 필터링 수행
+            df_filtered = df[df[station_col] == self.station_id]
+            filtered_count = len(df_filtered)
             print(f"충전소 '{self.station_id}' 필터링: {original_count:,} → {filtered_count:,}개 세션")
 
             if filtered_count == 0:
                 print(f"경고: 충전소 '{self.station_id}'에 대한 데이터가 없습니다.")
-                unique_stations = df[station_col].unique()[:10]
-                print(f"사용 가능한 충전소 ID (처음 10개): {list(unique_stations)}")
+                # 유사한 충전소 ID가 있는지 확인
+                similar_stations = [sid for sid in unique_stations if self.station_id.lower() in sid.lower() or sid.lower() in self.station_id.lower()]
+                if similar_stations:
+                    print(f"유사한 충전소 ID 발견: {similar_stations}")
+                
+                # 공백이나 특수문자 문제 확인
+                station_id_variants = df[station_col].str.strip().unique()
+                if self.station_id.strip() in station_id_variants:
+                    print(f"공백 문제 감지: 원본='{self.station_id}', 공백제거 후 재시도")
+                    df_filtered = df[df[station_col].str.strip() == self.station_id.strip()]
+                    print(f"공백 제거 후 결과: {len(df_filtered)}개 세션")
+            
+            return df_filtered
         else:
             print("경고: 충전소 ID 컬럼을 찾을 수 없습니다.")
             print(f"사용 가능한 컬럼: {list(df.columns)}")
+            return df
 
-        return df
-
-    def _generate_sample_data(self, days: int) -> pd.DataFrame:
-        """샘플 데이터 생성"""
-        print(f"샘플 데이터 생성 중... (최근 {days}일)")
-
-        # 날짜 범위 생성
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-
-        # 샘플 세션 데이터 생성
-        sample_sessions = []
-
-        for i in range(100):  # 100개 샘플 세션
-            session_start = start_date + timedelta(
-                seconds=np.random.randint(0, int((end_date - start_date).total_seconds()))
-            )
-            session_duration = timedelta(minutes=np.random.randint(15, 120))
-            session_end = session_start + session_duration
-
-            session = {
-                "충전소ID": self.station_id,
-                "충전기ID": f"CHG_{np.random.randint(1, 5):02d}",
-                "충전시작일시": session_start,
-                "충전종료일시": session_end,
-                "순간최고전력": np.random.uniform(20, 95),
-                "충전량(kWh)": np.random.uniform(10, 80),
-                "시작SOC(%)": np.random.randint(10, 50),
-                "완료SOC(%)": np.random.randint(60, 100),
-                "충전시간": session_duration.total_seconds() / 60,  # 분 단위
-            }
-            sample_sessions.append(session)
-
-        df = pd.DataFrame(sample_sessions)
-        print(f"샘플 데이터 생성 완료: {len(df)}개 세션")
-
-        return df
 
     def list_available_files(self) -> Dict:
         """사용 가능한 CSV 파일 목록과 정보 반환"""
@@ -378,17 +358,25 @@ class ChargingDataLoader:
             except Exception as e:
                 print(f"  {col} 날짜 변환 실패: {e}")
 
-        # 숫자 컬럼 찾기 및 변환
+        # 숫자 컬럼 찾기 및 변환 (전력 관련 컬럼 우선 처리)
         numeric_patterns = ["전력", "전압", "전류", "kWh", "SOC", "시간", "금액", "량"]
         numeric_columns = [col for col in df.columns if any(pattern in col for pattern in numeric_patterns)]
 
         for col in numeric_columns:
             try:
-                # 문자열에서 숫자가 아닌 문자 제거
+                # 문자열에서 숫자가 아닌 문자 제거 (쉼표, 공백 등)
                 df[col] = df[col].astype(str).str.replace(",", "", regex=False)
+                df[col] = df[col].str.replace(" ", "", regex=False)  # 공백 제거
                 df[col] = pd.to_numeric(df[col], errors="coerce")
                 valid_numbers = df[col].notna().sum()
                 print(f"  {col}: {valid_numbers:,}개 유효한 숫자")
+                
+                # 전력 데이터 범위 확인
+                if "전력" in col:
+                    power_data = df[col].dropna()
+                    if not power_data.empty:
+                        print(f"    전력 범위: {power_data.min():.1f} ~ {power_data.max():.1f}kW (평균: {power_data.mean():.1f}kW)")
+                        
             except Exception as e:
                 print(f"  {col} 숫자 변환 실패: {e}")
 
@@ -547,7 +535,8 @@ class ChargingDataLoader:
     def analyze_charging_patterns(self) -> Dict:
         """충전 패턴 분석 (개선된 버전)"""
         try:
-            df = self.load_historical_sessions(90)
+            # 차트와 패턴 분석을 위해 전체 데이터를 로드 (1년치)
+            df = self.load_historical_sessions(365)
             if df.empty:
                 return {"error": "분석할 데이터가 없습니다"}
             analysis = {
@@ -609,6 +598,35 @@ class ChargingDataLoader:
                         }
                 except Exception as e:
                     print(f"시간대별 패턴 분석 오류: {e}")
+
+            # 월별 패턴 생성 (차트 데이터용)
+            if date_columns and power_columns:
+                try:
+                    date_col = date_columns[0]
+                    power_col = power_columns[0]
+                    
+                    # 년-월 조합으로 그룹핑 (정확한 시계열 데이터)
+                    df["year_month"] = df[date_col].dt.strftime("%Y-%m")
+                    monthly_stats = df.groupby("year_month")[power_col].agg(["mean", "max", "count"]).round(2)
+                    
+                    if not monthly_stats.empty:
+                        analysis["monthly_patterns"] = {
+                            year_month: {
+                                "avg_power": float(row["mean"]) if pd.notna(row["mean"]) else 0,
+                                "max_power": float(row["max"]) if pd.notna(row["max"]) else 0,
+                                "session_count": int(row["count"]),
+                            }
+                            for year_month, row in monthly_stats.iterrows()
+                        }
+                        
+                    # 날짜 범위 정보 추가
+                    analysis["date_range"] = {
+                        "start": df[date_col].min(),
+                        "end": df[date_col].max()
+                    }
+                    
+                except Exception as e:
+                    print(f"월별 패턴 분석 오류: {e}")
 
             return analysis
         except Exception as e:
