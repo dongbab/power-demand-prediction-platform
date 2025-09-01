@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""여러 충전소의 예측값 비교 테스트"""
+
 
 import sys
 import os
@@ -8,7 +8,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'backend', 'app'))
 from backend.app.services.station_service import StationService
 
 def test_multiple_stations():
-    """여러 충전소의 예측값 비교"""
+    
     print("=== 여러 충전소 예측값 비교 테스트 ===\n")
     
     # 테스트할 충전소 목록 (BNS0061 포함)

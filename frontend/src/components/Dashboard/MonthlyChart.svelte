@@ -13,7 +13,6 @@
 	export function resetZoom() {
 		if (chart) {
 			chart.resetZoom();
-			console.log('Monthly chart zoom reset');
 		}
 	}
 	

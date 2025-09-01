@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""권고계약 전력과 예측값 관계 분석"""
+
 
 import sys
 import os
@@ -8,7 +8,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'backend', 'app'))
 from backend.app.services.station_service import StationService
 
 def debug_contract_prediction(station_id="BNS0061"):
-    """권고계약 전력과 예측값 관계 분석"""
+    
     print(f"=== {station_id} 권고계약 전력 분석 ===\n")
     
     try:

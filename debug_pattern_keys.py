@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""월별 패턴 키 매칭 디버그"""
+
 
 import sys
 import os
@@ -8,7 +8,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'backend', 'app'))
 from backend.app.data.loader import ChargingDataLoader
 
 def debug_pattern_keys(station_id="BNS0061"):
-    """월별 패턴 키와 실제 데이터 확인"""
+    
     print(f"=== {station_id} 월별 패턴 키 디버그 ===\n")
     
     try:

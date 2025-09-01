@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""차트 데이터 생성 디버그 스크립트"""
+
 
 import sys
 import os
@@ -9,7 +9,7 @@ from backend.app.data.loader import ChargingDataLoader
 from backend.app.services.station_service import StationService
 
 def debug_chart_generation(station_id="BNS0061"):
-    """차트 데이터 생성 디버그"""
+    
     print(f"=== 충전소 {station_id} 차트 데이터 생성 디버그 ===\n")
     
     try:

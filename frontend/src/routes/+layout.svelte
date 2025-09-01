@@ -163,7 +163,7 @@
 
 	:global(.metric-value.power) { color: #ff6b6b; }
 	:global(.metric-value.contract) { color: #4ecdc4; }
-	:global(.metric-value.utilization) { color: #45b7d1; }
+	:global(.metric-value.capacity-efficiency) { color: #45b7d1; }
 	:global(.metric-value.sessions) { color: #96ceb4; }
 
 	:global(.chart-card) {

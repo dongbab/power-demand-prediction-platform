@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""프론트엔드 API 응답 디버그"""
+
 
 import sys
 import os
@@ -9,7 +9,7 @@ from backend.app.services.station_service import StationService
 import json
 
 def debug_frontend_api(station_id="BNS0061"):
-    """프론트엔드가 받는 API 응답 확인"""
+    
     print(f"=== {station_id} API 응답 디버그 ===\n")
     
     try:

@@ -4,10 +4,10 @@ from typing import Dict, List, Any
 
 
 class DataValidator:
-    """데이터 품질 검증"""
+    
 
     def validate_power_data(self, df: pd.DataFrame) -> Dict[str, bool]:
-        """전력 데이터 검증"""
+        
         validation_results = {
             "has_required_columns": self._check_required_columns(df),
             "power_ranges_valid": self._check_power_ranges(df),
@@ -16,12 +16,12 @@ class DataValidator:
         return validation_results
 
     def _check_required_columns(self, df: pd.DataFrame) -> bool:
-        """필수 컬럼 존재 확인"""
+        
         required_cols = ["충전시작일시", "충전종료일시", "순간최고전력"]
         return all(col in df.columns for col in required_cols)
 
     def _check_power_ranges(self, df: pd.DataFrame) -> bool:
-        """전력 데이터 범위 확인"""
+        
         if "순간최고전력" not in df.columns:
             return False
 
@@ -44,7 +44,7 @@ class DataValidator:
         return valid_ratio >= 0.9
 
     def _check_timestamps(self, df: pd.DataFrame) -> bool:
-        """타임스탬프 유효성 확인"""
+        
         required_date_cols = ["충전시작일시", "충전종료일시"]
 
         # 필수 날짜 컬럼 존재 확인
@@ -74,13 +74,13 @@ class DataValidator:
 
 
 class ChargingDataValidator:
-    """충전 세션 데이터 검증"""
+    
 
     def __init__(self):
         self.data_validator = DataValidator()
 
     def validate_charging_sessions(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """충전 세션 데이터 전체 검증"""
+        
         try:
             if df is None or df.empty:
                 return {"success": False, "error": "데이터가 비어있습니다.", "validation_results": {}}
@@ -119,7 +119,7 @@ class ChargingDataValidator:
             return {"success": False, "error": f"검증 중 오류 발생: {str(e)}", "validation_results": {}}
 
     def _validate_columns(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """컬럼 검증"""
+        
         # 예상되는 충전 관련 컬럼들
         expected_columns = [
             "충전소ID",
@@ -145,7 +145,7 @@ class ChargingDataValidator:
         }
 
     def _validate_data_types(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """데이터 타입 검증"""
+        
         data_types = {}
         for col in df.columns:
             dtype = str(df[col].dtype)
@@ -155,7 +155,7 @@ class ChargingDataValidator:
         return data_types
 
     def _validate_missing_values(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """결측값 검증"""
+        
         missing_info = {}
         total_rows = len(df)
 
@@ -171,7 +171,7 @@ class ChargingDataValidator:
         return missing_info
 
     def _validate_station_ids(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """충전소 ID 검증"""
+        
         station_id_cols = ["충전소ID", "station_id", "충전소명"]
         station_col = None
 
@@ -193,12 +193,12 @@ class ChargingDataValidator:
         }
 
     def _has_power_columns(self, df: pd.DataFrame) -> bool:
-        """전력 관련 컬럼이 있는지 확인"""
+        
         power_columns = ["순간최고전력", "충전량", "전력"]
         return any(col in df.columns for col in power_columns)
 
     def _get_overall_status(self, validation_results: Dict) -> Dict[str, Any]:
-        """전체 검증 상태 요약"""
+        
         issues = []
 
         # 컬럼 이슈 확인

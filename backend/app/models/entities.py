@@ -1,5 +1,3 @@
-"""Domain entities and data classes"""
-
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -8,8 +6,6 @@ import pandas as pd
 
 @dataclass
 class ChargingSession:
-    """Represents a single charging session"""
-
     session_id: str
     station_id: str
     charger_id: str
@@ -23,10 +19,11 @@ class ChargingSession:
 
     @classmethod
     def from_csv_row(cls, row: pd.Series) -> "ChargingSession":
-        """Create ChargingSession from CSV row"""
         try:
             # Required fields with error handling
-            session_id = str(row.get("세션ID", row.name if hasattr(row, "name") else "UNKNOWN"))
+            session_id = str(
+                row.get("세션ID", row.name if hasattr(row, "name") else "UNKNOWN")
+            )
 
             if "충전소ID" not in row or pd.isna(row["충전소ID"]):
                 raise ValueError("Missing required field: 충전소ID")
@@ -94,14 +91,18 @@ class ChargingSession:
 
         except Exception as e:
             # Provide more context for debugging
-            row_info = f"Row data: {dict(row.head(5))}" if hasattr(row, "head") else f"Row: {row}"
-            raise ValueError(f"Failed to create ChargingSession from CSV row: {e}. {row_info}")
+            row_info = (
+                f"Row data: {dict(row.head(5))}"
+                if hasattr(row, "head")
+                else f"Row: {row}"
+            )
+            raise ValueError(
+                f"Failed to create ChargingSession from CSV row: {e}. {row_info}"
+            )
 
 
 @dataclass
 class ChargingStation:
-    """Represents a charging station"""
-
     station_id: str
     name: str
     location: str
@@ -116,7 +117,6 @@ class ChargingStation:
 
     @classmethod
     def from_csv_data(cls, station_id: str, df: pd.DataFrame) -> "ChargingStation":
-        """Create ChargingStation from CSV data"""
         try:
             if df.empty:
                 raise ValueError(f"Empty DataFrame provided for station {station_id}")
@@ -128,7 +128,9 @@ class ChargingStation:
                 value = first_row.get(key)
                 result = str(value) if pd.notna(value) else default
                 if key == "충전소주소":
-                    print(f"DEBUG safe_str_get - Key: {key}, Value: '{value}', Result: '{result}'")
+                    print(
+                        f"DEBUG safe_str_get - Key: {key}, Value: '{value}', Result: '{result}'"
+                    )
                 return result
 
             name = safe_str_get("충전소명", f"충전소 {station_id}")
@@ -168,11 +170,12 @@ class ChargingStation:
             )
 
         except Exception as e:
-            raise ValueError(f"Failed to create ChargingStation from CSV data for station {station_id}: {e}")
+            raise ValueError(
+                f"Failed to create ChargingStation from CSV data for station {station_id}: {e}"
+            )
 
     @staticmethod
     def _extract_region(address: str) -> str:
-        """Extract region from address"""
         try:
             if not address or pd.isna(address):
                 return "미상"
@@ -186,7 +189,6 @@ class ChargingStation:
 
     @staticmethod
     def _extract_city(address: str) -> str:
-        """Extract city from address"""
         try:
             if not address or pd.isna(address):
                 return "미상"
@@ -201,8 +203,6 @@ class ChargingStation:
 
 @dataclass
 class PredictionResult:
-    """Result of a power prediction"""
-
     station_id: str
     predicted_peak: float  # kW
     prediction_time: datetime
@@ -213,7 +213,6 @@ class PredictionResult:
     factors: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for API response"""
         return {
             "station_id": self.station_id,
             "predicted_peak": round(self.predicted_peak, 1),
@@ -228,8 +227,6 @@ class PredictionResult:
 
 @dataclass
 class ContractRecommendation:
-    """Monthly contract power recommendation"""
-
     station_id: str
     year: int
     month: int
@@ -242,14 +239,15 @@ class ContractRecommendation:
     reasoning: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for API response"""
         return {
             "station_id": self.station_id,
             "year": self.year,
             "month": self.month,
             "predicted_peak_kw": round(self.predicted_peak, 1),
             "recommended_contract_kw": self.recommended_contract,
-            "confidence_interval": {k: round(v, 1) for k, v in self.confidence_interval.items()},
+            "confidence_interval": {
+                k: round(v, 1) for k, v in self.confidence_interval.items()
+            },
             "seasonal_factor": self.seasonal_factor,
             "safety_margin": self.safety_margin,
             "method": self.method,
@@ -260,8 +258,6 @@ class ContractRecommendation:
 
 @dataclass
 class AnalysisResult:
-    """Station analysis result"""
-
     station_id: str
     station_info: ChargingStation
     summary: Dict[str, Any]

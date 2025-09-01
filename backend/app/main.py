@@ -14,7 +14,7 @@ logger: Any = None
 
 
 async def initialize_services():
-    """Initialize minimal services for API"""
+    
     global logger
     if logger is None:
         logger = setup_logger("charging_predictor", level="INFO")
@@ -32,7 +32,7 @@ async def initialize_services():
 
 
 async def shutdown_services():
-    """Cleanup services"""
+    
     global logger
     if logger:
         logger.info("Services shut down successfully")
@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
 
 
 def setup_routes():
-    """Setup routes and middleware"""
+    
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[

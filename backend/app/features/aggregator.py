@@ -6,13 +6,13 @@ import logging
 
 
 class FeatureAggregator:
-    """특성 집계"""
+    
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
 
     def aggregate_session_features(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """세션 데이터를 집계하여 특성 추출"""
+        
         if df.empty:
             return {}
 
@@ -103,7 +103,7 @@ class FeatureAggregator:
             return {}
 
     def _analyze_hourly_patterns(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """시간대별 패턴 분석"""
+        
         if "충전시작일시" not in df.columns or "순간최고전력" not in df.columns:
             return {}
 
@@ -137,7 +137,7 @@ class FeatureAggregator:
             return {}
 
     def _analyze_daily_patterns(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """요일별 패턴 분석"""
+        
         if "충전시작일시" not in df.columns or "순간최고전력" not in df.columns:
             return {}
 
@@ -170,7 +170,7 @@ class FeatureAggregator:
             return {}
 
     def aggregate_hourly_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """시간대별 특성 집계"""
+        
         if df.empty:
             return df
 
@@ -198,7 +198,7 @@ class FeatureAggregator:
             return df
 
     def aggregate_daily_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """일별 특성 집계"""
+        
         if df.empty:
             return df
 
@@ -226,7 +226,7 @@ class FeatureAggregator:
             return df
 
     def calculate_concurrency_stats(self, df: pd.DataFrame) -> Dict:
-        """동시 충전 통계 계산"""
+        
         if df.empty or "충전시작일시" not in df.columns or "충전종료일시" not in df.columns:
             return {}
 

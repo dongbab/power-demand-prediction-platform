@@ -102,7 +102,6 @@ export const stationActions: StationActions = {
                 total: (response.stations || []).length,
             });
         } catch (err: unknown) {
-            console.error("Failed to load stations:", err);
             const errorMessage =
                 err instanceof Error ? err.message : "Unknown error occurred";
 
@@ -175,7 +174,6 @@ export const stationActions: StationActions = {
                 monthlyContract,
             });
         } catch (err: unknown) {
-            console.error("Failed to load station data:", err);
             const errorMessage =
                 err instanceof Error ? err.message : "Unknown error occurred";
             error.set(errorMessage);
@@ -199,7 +197,6 @@ export const stationActions: StationActions = {
             hasData.set(status.hasData);
             requiresUpload.set(!status.hasData);
         } catch (err: unknown) {
-            console.error("Failed to check system status:", err);
             requiresUpload.set(true);
             hasData.set(false);
         }
@@ -221,7 +218,6 @@ export const stationActions: StationActions = {
                 error.set(result.message || "업로드에 실패했습니다.");
             }
         } catch (err: unknown) {
-            console.error("Failed to upload CSV:", err);
             const errorMessage =
                 err instanceof Error ? err.message : "Upload failed";
             error.set(errorMessage);

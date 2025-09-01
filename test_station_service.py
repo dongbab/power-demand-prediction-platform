@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test StationService directly"""
+
 
 import sys
 import os
@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 from backend.app.services.station_service import StationService
 
 def test_station_service(station_id="BNS0061"):
-    """Test station service directly"""
+    
     service = StationService()
     result = service.get_station_prediction(station_id)
     

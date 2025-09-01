@@ -64,7 +64,6 @@
         try {
             await stationActions.loadStationData(stationId);
         } catch (error) {
-            console.error('Failed to load station data:', error);
             uiActions.showNotification(
                 '데이터 로딩에 실패했습니다. 새로고침을 시도해주세요.',
                 'error'
@@ -364,9 +363,22 @@
                     <span class="detail-value">{station.connector_type}</span>
                 </div>
                 <div class="detail-item">
-                    <span class="detail-label">📊 이용률</span>
-                    <span class="detail-value"
-                        >{station.utilization || "-"}</span
+                    <span class="detail-label">
+                        📊 용량 효율성
+                        <div class="info-tooltip">
+                            <div class="info-icon">?</div>
+                            <div class="tooltip-content">
+                                <div class="tooltip-formula">
+                                    <strong>계산 방식:</strong> 평균전력 / 정격용량 × 100%
+                                </div>
+                                <div class="capacity-examples">
+                                    완속(AC): 7kW 기준 • 급속(DC): 100kW 기준
+                                </div>
+                            </div>
+                        </div>
+                    </span>
+                    <span class="detail-value capacity-efficiency"
+                        >{station.capacity_efficiency || "-"}</span
                     >
                 </div>
             </div>
@@ -864,6 +876,79 @@
         font-size: 0.75em;
         opacity: 0.7;
         font-weight: 400;
+    }
+    
+    /* 툴팁 스타일 */
+    .info-tooltip {
+        position: relative;
+        display: inline-block;
+        margin-left: 4px;
+    }
+    
+    .info-icon {
+        width: 16px;
+        height: 16px;
+        color: var(--primary-color, #4f46e5);
+        cursor: help;
+        transition: all 0.2s ease;
+        opacity: 0.6;
+        flex-shrink: 0;
+        border-radius: 50%;
+        background: rgba(79, 70, 229, 0.1);
+        border: 1px solid rgba(79, 70, 229, 0.2);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 700;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        line-height: 1;
+    }
+    
+    .info-icon:hover {
+        color: white;
+        opacity: 1;
+        transform: scale(1.1);
+        background: var(--primary-color, #4f46e5);
+        border-color: var(--primary-color, #4f46e5);
+    }
+    
+    .tooltip-content {
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--bg-primary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 12px 16px;
+        font-size: 12px;
+        box-shadow: 0 4px 20px var(--shadow);
+        opacity: 0;
+        visibility: hidden;
+        transition: all 0.3s ease;
+        z-index: 1000;
+        min-width: 200px;
+        max-width: 280px;
+        white-space: nowrap;
+    }
+    
+    .info-tooltip:hover .tooltip-content {
+        opacity: 1;
+        visibility: visible;
+        transform: translateX(-50%) translateY(-8px);
+    }
+    
+    .tooltip-formula {
+        margin-bottom: 6px;
+        line-height: 1.3;
+    }
+    
+    .capacity-examples {
+        font-style: italic;
+        color: var(--text-muted);
+        font-size: 11px;
+        line-height: 1.2;
     }
 
     .header-title {

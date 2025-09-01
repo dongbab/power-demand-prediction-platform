@@ -33,7 +33,7 @@ class ChargingDataLoader:
         return p.name in MARKER_CANDIDATES
 
     def get_active_csv_file(self) -> Optional[Path]:
-        """활성 CSV 선택: .active_csv(.csv) 파일(파일명만 허용)"""
+        
         for marker_name in MARKER_CANDIDATES:
             marker = self.data_dir / marker_name
             if marker.exists():
@@ -54,7 +54,7 @@ class ChargingDataLoader:
         return None
 
     def get_latest_csv_file(self) -> Optional[Path]:
-        """수정시간 기준 최신 CSV 파일 반환"""
+        
         files = self.find_csv_files()
         if not files:
             return None
@@ -62,7 +62,7 @@ class ChargingDataLoader:
         return files_sorted[0]
 
     def find_csv_files(self) -> List[Path]:
-        """사용 가능한 CSV 파일들 찾기(마커 파일 제외)"""
+        
         csv_files = []
         patterns = [
             "충전이력*.csv",
@@ -97,7 +97,7 @@ class ChargingDataLoader:
         return csv_files
 
     def load_csv_file(self, csv_file: Path = None, encoding: str = "utf-8", max_rows: int = None) -> pd.DataFrame:
-        """지정된 CSV 파일 로드 (인코딩 자동 감지) - 메모리 효율성 개선"""
+        
         if csv_file is None:
             # 활성 파일 > 최신 파일 순서로 선택 (항상 data/raw 내부)
             csv_file = self.get_active_csv_file() or self.get_latest_csv_file()
@@ -157,7 +157,7 @@ class ChargingDataLoader:
         return pd.DataFrame()
 
     def load_historical_sessions(self, days: int = 90, csv_file: str = None, merge_all: bool = False) -> pd.DataFrame:
-        """개선된 히스토리 세션 로드"""
+        
 
         # CSV 파일 지정
         if csv_file:
@@ -212,7 +212,7 @@ class ChargingDataLoader:
             return pd.DataFrame()
 
     def _filter_by_station(self, df: pd.DataFrame) -> pd.DataFrame:
-        """충전소별 필터링"""
+        
         station_columns = ["충전소ID", "충전소명", "station_id", "station_name"]
         station_col = None
 
@@ -255,7 +255,7 @@ class ChargingDataLoader:
 
 
     def list_available_files(self) -> Dict:
-        """사용 가능한 CSV 파일 목록과 정보 반환"""
+        
         csv_files = self.find_csv_files()
 
         active = self.get_active_csv_file() or (csv_files[0] if csv_files else None)
@@ -294,7 +294,7 @@ class ChargingDataLoader:
 
     # 기존 메서드들은 그대로 유지 (_normalize_column_names, _convert_data_types, etc.)
     def _normalize_column_names(self, df: pd.DataFrame) -> pd.DataFrame:
-        """컬럼명 정규화"""
+        
         print("컬럼명 정규화 중...")
 
         # 컬럼명 공백 제거 및 정리
@@ -310,7 +310,7 @@ class ChargingDataLoader:
         return df
 
     def _convert_data_types(self, df: pd.DataFrame) -> pd.DataFrame:
-        """데이터 타입 변환 (안전한 방식)"""
+        
         print("데이터 타입 변환 중...")
 
         # 날짜 컬럼 찾기 및 변환
@@ -383,7 +383,7 @@ class ChargingDataLoader:
         return df
 
     def _filter_by_days(self, df: pd.DataFrame, days: int) -> pd.DataFrame:
-        """최근 N일 데이터 필터링"""
+        
         date_columns = [col for col in df.columns if "시작일시" in col or "start" in col.lower()]
 
         if not date_columns:
@@ -407,7 +407,7 @@ class ChargingDataLoader:
             return df
 
     def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """데이터 정제"""
+        
         print("데이터 정제 중...")
         original_size = len(df)
 
@@ -442,7 +442,7 @@ class ChargingDataLoader:
         }
 
     def load_external_factors(self) -> Dict:
-        """외부 요인 로드"""
+        
         current_date = datetime.now()
 
         holidays = [
@@ -468,7 +468,7 @@ class ChargingDataLoader:
         }
 
     def _get_season(self, month: int) -> str:
-        """계절 구분"""
+        
         if month in [3, 4, 5]:
             return "봄"
         elif month in [6, 7, 8]:
@@ -479,7 +479,7 @@ class ChargingDataLoader:
             return "겨울"
 
     def get_data_summary(self) -> Dict:
-        """데이터 요약 정보"""
+        
         try:
             df = self.load_historical_sessions()
 
@@ -533,7 +533,7 @@ class ChargingDataLoader:
             return {"error": f"데이터 요약 생성 실패: {str(e)}"}
 
     def analyze_charging_patterns(self) -> Dict:
-        """충전 패턴 분석 (개선된 버전)"""
+        
         try:
             # 차트와 패턴 분석을 위해 전체 데이터를 로드 (1년치)
             df = self.load_historical_sessions(365)

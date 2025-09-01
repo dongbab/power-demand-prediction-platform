@@ -9,8 +9,6 @@ from ..models.validators import ChargingDataValidator
 
 
 class ChargingDataRepository:
-    """Repository for charging station data access"""
-
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.validator = ChargingDataValidator()
@@ -19,7 +17,6 @@ class ChargingDataRepository:
         self._cache_expire_minutes = 30
 
     def get_historical_sessions(self, station_id: Optional[str] = None, days: int = 90) -> pd.DataFrame:
-        """Get historical charging sessions data"""
         try:
             # Use "ALL" for aggregated data if station_id is None
             loader_id = station_id if station_id is not None else "ALL"
@@ -48,7 +45,7 @@ class ChargingDataRepository:
             return pd.DataFrame()
 
     def get_station_info(self, station_id: str) -> Optional[ChargingStation]:
-        """Get information about a specific charging station"""
+        
         try:
             stations = self._get_stations_cache()
             return stations.get(station_id)
@@ -57,7 +54,7 @@ class ChargingDataRepository:
             return None
 
     def get_available_stations(self) -> List[ChargingStation]:
-        """Get list of all available charging stations"""
+        
         try:
             stations = self._get_stations_cache()
             return list(stations.values())
@@ -66,7 +63,7 @@ class ChargingDataRepository:
             return []
 
     def station_exists(self, station_id: str) -> bool:
-        """Check if a station exists in the data"""
+        
         try:
             stations = self._get_stations_cache()
             return station_id in stations
@@ -75,7 +72,7 @@ class ChargingDataRepository:
             return False
 
     def get_data_summary(self, station_id: str) -> Dict[str, Any]:
-        """Get data summary for a station"""
+        
         try:
             loader = ChargingDataLoader(station_id)
             summary = loader.get_data_summary()
@@ -90,7 +87,7 @@ class ChargingDataRepository:
             return {"error": str(e)}
 
     def analyze_charging_patterns(self, station_id: str) -> Dict[str, Any]:
-        """Analyze charging patterns for a station"""
+        
         try:
             loader = ChargingDataLoader(station_id)
             patterns = loader.analyze_charging_patterns()
@@ -105,7 +102,7 @@ class ChargingDataRepository:
             return {"error": str(e)}
 
     def get_realtime_status(self, station_id: str) -> Dict[str, Any]:
-        """Get real-time status for a station"""
+        
         try:
             loader = ChargingDataLoader(station_id)
             status = loader.load_realtime_status()
@@ -115,7 +112,7 @@ class ChargingDataRepository:
             return {"error": str(e)}
 
     def get_external_factors(self) -> Dict[str, Any]:
-        """Get external factors affecting charging demand"""
+        
         try:
             # Use a dummy loader to get external factors
             loader = ChargingDataLoader("ALL")
@@ -126,7 +123,7 @@ class ChargingDataRepository:
             return {"error": str(e)}
 
     def get_data_quality_report(self, station_id: str) -> Dict[str, Any]:
-        """Get data quality report for a station"""
+        
         try:
             df = self.get_historical_sessions(station_id)
 
@@ -144,7 +141,7 @@ class ChargingDataRepository:
             return {"error": str(e)}
 
     def _get_stations_cache(self) -> Dict[str, ChargingStation]:
-        """Get cached station information"""
+        
         current_time = datetime.now()
 
         # Temporarily disable cache for debugging location issue
@@ -163,7 +160,7 @@ class ChargingDataRepository:
         return self._station_cache
 
     def _load_stations_from_data(self) -> Dict[str, ChargingStation]:
-        """Load station information from CSV data"""
+        
         stations = {}
 
         try:
@@ -239,13 +236,13 @@ class ChargingDataRepository:
         return stations
 
     def invalidate_cache(self) -> None:
-        """Invalidate the station cache"""
+        
         self._station_cache = None
         self._cache_timestamp = None
         self.logger.info("Station cache invalidated")
 
     def get_station_sessions(self, station_id: str, limit: Optional[int] = None) -> List[ChargingSession]:
-        """Get charging sessions for a station as ChargingSession objects"""
+        
         try:
             df = self.get_historical_sessions(station_id)
 

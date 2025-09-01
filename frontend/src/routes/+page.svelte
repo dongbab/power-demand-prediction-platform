@@ -117,7 +117,7 @@
 	<div class="header">
 		<div class="header-content">
 			<div class="header-text">
-				<h1>블루네트웍스 충전소 전력 예측 시스템</h1>
+				<h1 class="blue-header">블루네트웍스 충전소 전력 예측 시스템</h1>
 			</div>
 			<div class="header-actions">
 				<ThemeToggle />
@@ -280,7 +280,7 @@
                 <option value="sessions">세션수</option>
                 <option value="avg_power">평균 전력</option>
                 <option value="max_power">최대 전력</option>
-                <option value="utilization">사용률</option>
+                <option value="capacity_efficiency">용량 효율성</option>
                 <option value="charger_type">충전기 타입</option>
                 <option value="last_activity">마지막 활동</option>
             </select>
@@ -383,8 +383,25 @@
 									<div class="metric-label">충전 세션</div>
 								</div>
 								<div class="metric-item secondary">
-									<div class="metric-value">{station.utilization || 'N/A'}</div>
-									<div class="metric-label">사용률</div>
+									<div class="metric-value capacity-efficiency" title="평균 사용량 / 정격 용량 × 100%">{station.capacity_efficiency || 'N/A'}</div>
+									<div class="metric-label">
+										용량 효율성
+										<div class="calculation-info">
+											<svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+												<circle cx="12" cy="12" r="10"/>
+												<path d="M9,9h0a3,3,0,0,1,5.12,2.12A3,3,0,0,1,12,15"/>
+												<circle cx="12" cy="19" r=".02"/>
+											</svg>
+											<div class="tooltip">
+												<div class="tooltip-formula">
+													<strong>계산 방식:</strong> 평균전력 / 정격용량 × 100%
+												</div>
+												<div class="capacity-examples">
+													완속(AC): 7kW 기준 • 급속(DC): 100kW 기준
+												</div>
+											</div>
+										</div>
+									</div>
 								</div>
 							</div>
 						</div>
@@ -429,8 +446,8 @@
 	.header {
 		margin-bottom: 40px;
 		padding: 40px 20px;
-		background: var(--gradient-primary);
-		color: white;
+		background: white;
+		color: #374151;
 		border-radius: 16px;
 		box-shadow: 0 8px 32px var(--shadow);
 	}
@@ -451,6 +468,27 @@
 		margin: 0 0 10px 0;
 		font-size: 2.5em;
 		font-weight: 700;
+	}
+	
+	.header h1.blue-header {
+		color: #3b82f6;
+		background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+		-webkit-background-clip: text;
+		-webkit-text-fill-color: transparent;
+		background-clip: text;
+		position: relative;
+		padding-bottom: 12px;
+	}
+	
+	.header h1.blue-header::after {
+		content: '';
+		position: absolute;
+		bottom: 0;
+		left: 0;
+		width: 80px;
+		height: 4px;
+		background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+		border-radius: 2px;
 	}
 	
 	.header p {
@@ -1062,7 +1100,7 @@
 		align-items: center;
 		justify-content: center;
 		gap: 8px;
-		font-size: 0.9em;
+		font-size: 1.1em;
 		font-weight: 600;
 		color: var(--primary-color);
 		transition: all 0.3s ease;
@@ -1094,6 +1132,63 @@
 	.btn-primary:disabled {
 		background: #ccc;
 		cursor: not-allowed;
+	}
+	
+	/* 툴팁 스타일 */
+	.calculation-info {
+		position: relative;
+		display: inline-block;
+		margin-left: 4px;
+	}
+	
+	.info-icon {
+		width: 14px;
+		height: 14px;
+		color: var(--text-muted);
+		cursor: help;
+		transition: color 0.2s ease;
+	}
+	
+	.info-icon:hover {
+		color: var(--primary-color);
+	}
+	
+	.tooltip {
+		position: absolute;
+		bottom: 100%;
+		left: 50%;
+		transform: translateX(-50%);
+		background: var(--bg-primary);
+		border: 1px solid var(--border-color);
+		border-radius: 8px;
+		padding: 12px 16px;
+		font-size: 12px;
+		white-space: nowrap;
+		box-shadow: 0 4px 20px var(--shadow);
+		opacity: 0;
+		visibility: hidden;
+		transition: all 0.3s ease;
+		z-index: 1000;
+		max-width: 280px;
+		white-space: normal;
+	}
+	
+	.calculation-info:hover .tooltip {
+		opacity: 1;
+		visibility: visible;
+		transform: translateX(-50%) translateY(-8px);
+	}
+	
+	.tooltip-formula {
+		margin-bottom: 6px;
+		line-height: 1.3;
+	}
+	
+	.capacity-examples {
+		font-style: italic;
+		color: var(--text-muted);
+		font-size: 11px;
+		line-height: 1.2;
 	}
 	
 	/* Modern filter controls */

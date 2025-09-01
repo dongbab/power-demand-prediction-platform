@@ -86,7 +86,7 @@ python -m uvicorn app.main:app --reload
 - **FastAPI**: 고성능 Python 웹 프레임워크
 - **Pandas**: 데이터 분석 및 처리
 - **NumPy**: 수치 계산
-- **Scikit-learn**: 머신러닝 (통계 예측)
+- **SciPy**: 고급 통계 분석 및 극값 이론
 - **Uvicorn**: ASGI 서버
 
 ### Frontend (선택사항)

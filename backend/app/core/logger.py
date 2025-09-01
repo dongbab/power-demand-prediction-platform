@@ -40,13 +40,13 @@ def setup_logger(name: str, log_file: str = None, level: str = "INFO") -> loggin
 
 
 class PerformanceLogger:
-    """성능 로깅"""
+    
 
     def __init__(self, logger_name: str = "performance"):
         self.logger = setup_logger(logger_name, "logs/performance.log")
 
     def log_prediction_performance(self, actual: float, predicted: float, station_id: str, timestamp: datetime):
-        """예측 성능 로깅"""
+        
         error = abs(actual - predicted)
         error_rate = error / actual if actual > 0 else 0
 
@@ -58,7 +58,7 @@ class PerformanceLogger:
         )
 
     def log_model_training(self, model_name: str, training_time: float, accuracy_metrics: dict):
-        """모델 훈련 성능 로깅"""
+        
         self.logger.info(
             f"Training - Model: {model_name}, " f"Time: {training_time:.2f}s, " f"Metrics: {accuracy_metrics}"
         )

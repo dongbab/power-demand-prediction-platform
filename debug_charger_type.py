@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""충전기 타입 판별 디버그"""
+
 
 import sys
 import os
@@ -9,7 +9,7 @@ from backend.app.data.loader import ChargingDataLoader
 from backend.app.services.station_service import StationService
 
 def debug_charger_type(station_id="BNS0061"):
-    """충전기 타입 판별 과정 디버그"""
+    
     print(f"=== {station_id} 충전기 타입 판별 디버그 ===\n")
     
     try:

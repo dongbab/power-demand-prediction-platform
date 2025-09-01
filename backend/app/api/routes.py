@@ -63,7 +63,7 @@ async def list_stations(
     sort_by: str = "id",
     sort_order: str = "asc",
 ):
-    """충전소 목록 조회 - CSV 업로드 후 사용 가능"""
+    
     try:
         logger.info(f"API called: page={page}, limit={limit}, search={search}")
 
@@ -115,7 +115,7 @@ async def list_stations(
 
 @api_router.get("/station-analysis/{station_id}")
 async def get_station_detailed_analysis(station_id: str):
-    """충전소 상세 분석 - 기존 loader 메서드 활용"""
+    
     try:
         loader = ChargingDataLoader(station_id)
 
@@ -249,7 +249,7 @@ async def get_station_detailed_analysis(station_id: str):
 
 @api_router.get("/predict/{station_id}")
 async def predict_peak_power(station_id: str):
-    """전력 예측 - StatisticalPredictor 활용"""
+    
     try:
         # 기존 분석 모듈 활용
         loader = ChargingDataLoader(station_id)
@@ -282,7 +282,7 @@ async def predict_peak_power(station_id: str):
 
 @api_router.post("/admin/upload-csv")
 async def upload_csv_file(file: UploadFile = File(...), file_type: str = Form("charging_sessions")):
-    """CSV 업로드 - ChargingDataValidator 활용"""
+    
     try:
         logger.info(f"Upload started: {file.filename}")
 
@@ -350,7 +350,7 @@ async def upload_csv_file(file: UploadFile = File(...), file_type: str = Form("c
             validation_result = {"status": "validation_skipped", "reason": str(e)}
 
         def clean_for_json(obj):
-            """JSON 직렬화를 위한 데이터 정리"""
+            
             import numpy as np
 
             if isinstance(obj, (np.integer, np.floating)):
@@ -399,7 +399,7 @@ async def upload_csv_file(file: UploadFile = File(...), file_type: str = Form("c
 
 @api_router.get("/data-range/{station_id}")
 async def get_data_range(station_id: str):
-    """충전소 데이터 범위 확인 (실제 데이터가 있는 기간)"""
+    
     try:
         loader = ChargingDataLoader(station_id)
 
@@ -483,7 +483,7 @@ async def get_data_range(station_id: str):
 
 @api_router.get("/stations/{station_id}/timeseries")
 async def get_station_timeseries(station_id: str, days: int = 3650):
-    """충전소 시계열 데이터 - 중앙화된 서비스 사용"""
+    
     try:
         station_service = get_station_service()
         return station_service.get_station_timeseries(station_id, days)
@@ -495,7 +495,7 @@ async def get_station_timeseries(station_id: str, days: int = 3650):
 
 @api_router.get("/stations/{station_id}/timeseries.csv")
 async def get_station_timeseries_csv(station_id: str, days: int = 3650):
-    """충전소 시계열 데이터를 CSV 형식으로 반환 - 중앙화된 서비스 사용"""
+    
     try:
         from fastapi.responses import Response
 
@@ -536,7 +536,7 @@ async def get_station_timeseries_csv(station_id: str, days: int = 3650):
 
 @api_router.get("/stations/{station_id}/prediction")
 async def get_station_prediction(station_id: str):
-    """충전소 예측 데이터 - 중앙화된 서비스 사용"""
+    
     try:
         station_service = get_station_service()
         return station_service.get_station_prediction(station_id)
@@ -548,7 +548,7 @@ async def get_station_prediction(station_id: str):
 
 @api_router.get("/stations/{station_id}/energy-demand-forecast")
 async def get_energy_demand_forecast(station_id: str, days: int = 90):
-    """에너지 수요 예측 - kWh 기반 분석"""
+    
     try:
         station_service = get_station_service()
         return station_service.get_energy_demand_forecast(station_id, days)
@@ -566,7 +566,7 @@ async def get_monthly_contract_recommendation(
     mode: str = "p95",
     round_kw: int = 1
 ):
-    """월별 계약전력 추천 - 중앙화된 서비스 사용"""
+    
     try:
         station_service = get_station_service()
         return station_service.get_monthly_contract_recommendation(
@@ -580,7 +580,7 @@ async def get_monthly_contract_recommendation(
 
 @api_router.post("/admin/refresh-cache")
 async def refresh_cache():
-    """캐시 새로고침 - 중앙화된 서비스의 캐시 클리어"""
+    
     try:
         station_service = get_station_service()
         station_service.clear_cache()
@@ -625,7 +625,7 @@ async def get_system_status():
 
 @api_router.post("/admin/clear-data")
 async def clear_all_data():
-    """모든 데이터 삭제"""
+    
     try:
         data_dir = get_data_dir()
         csv_files = list(data_dir.glob("*.csv"))
@@ -658,5 +658,5 @@ async def clear_all_data():
 
 @api_router.get("/test")
 async def test_api():
-    """API 테스트"""
+    
     return {"message": "API 정상 작동!", "timestamp": datetime.now().isoformat(), "main_loaded": main is not None}

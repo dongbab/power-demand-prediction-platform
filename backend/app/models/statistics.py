@@ -1,5 +1,3 @@
-"""Statistical prediction model"""
-
 from typing import Dict, Any, Optional
 import pandas as pd
 import numpy as np
@@ -11,8 +9,6 @@ from .validators import ChargingDataValidator
 
 
 class StatisticalPredictor:
-    """Statistical-based power prediction model"""
-
     def __init__(self, station_id: str):
         self.station_id = station_id
         self.validator = ChargingDataValidator()
@@ -21,7 +17,6 @@ class StatisticalPredictor:
         self._training_data: Optional[pd.DataFrame] = None
 
     def train(self, data: pd.DataFrame) -> None:
-        """Train the statistical model"""
         if not self.validate_data(data):
             raise ValueError("Invalid training data format")
 
@@ -40,7 +35,6 @@ class StatisticalPredictor:
         self.metadata.training_data_size = len(clean_data)
 
     def predict_hourly_peak(self, hours_ahead: int = 24) -> PredictionResult:
-        """Predict peak power for next hour"""
         if not self.is_trained:
             raise ValueError("Model must be trained before prediction")
 
@@ -87,7 +81,6 @@ class StatisticalPredictor:
         )
 
     def predict_monthly_peak(self, year: int, month: int) -> ContractRecommendation:
-        """Predict monthly peak and recommend contract power"""
         if not self.is_trained:
             raise ValueError("Model must be trained before prediction")
 
@@ -120,7 +113,9 @@ class StatisticalPredictor:
         confidence_lower = predicted_peak * 0.85
         confidence_upper = predicted_peak * 1.15
 
-        reasoning = self._generate_contract_reasoning(predicted_peak, recommended_contract, seasonal_factor, month)
+        reasoning = self._generate_contract_reasoning(
+            predicted_peak, recommended_contract, seasonal_factor, month
+        )
 
         return ContractRecommendation(
             station_id=self.station_id,
@@ -135,8 +130,9 @@ class StatisticalPredictor:
             reasoning=reasoning,
         )
 
-    def forecast_peak(self, days: int = 1, agg: str = "hourly", mode: str = "p95") -> pd.DataFrame:
-        """Forecast peak power for given number of days"""
+    def forecast_peak(
+        self, days: int = 1, agg: str = "hourly", mode: str = "p95"
+    ) -> pd.DataFrame:
         if not self.is_trained:
             # Try to train with available data
             from ..data.loader import ChargingDataLoader
@@ -164,7 +160,11 @@ class StatisticalPredictor:
                 month = target_time.month
 
                 base_power = self._get_hourly_base_power(hour_of_day, weekday)
-                seasonal_factor = self._seasonal_factors.get(month, 1.0) if self._seasonal_factors else 1.0
+                seasonal_factor = (
+                    self._seasonal_factors.get(month, 1.0)
+                    if self._seasonal_factors
+                    else 1.0
+                )
                 weekend_factor = 0.85 if weekday >= 5 else 1.0
 
                 if mode == "p95":
@@ -172,7 +172,9 @@ class StatisticalPredictor:
                 else:  # mean
                     # For mean mode, use mean instead of p95
                     if self._hourly_profiles:
-                        profile = self._hourly_profiles.get(hour_of_day, {}).get(weekday, {})
+                        profile = self._hourly_profiles.get(hour_of_day, {}).get(
+                            weekday, {}
+                        )
                         base_power = profile.get("mean", base_power)
                     predicted_power = base_power * seasonal_factor * weekend_factor
 
@@ -189,7 +191,6 @@ class StatisticalPredictor:
         return pd.DataFrame(predictions)
 
     def _build_hourly_profiles(self, data: pd.DataFrame) -> None:
-        """Build hourly power profiles from training data"""
         data = data.copy()
         data["hour"] = data["충전시작일시"].dt.hour
         data["weekday"] = data["충전시작일시"].dt.weekday
@@ -222,7 +223,6 @@ class StatisticalPredictor:
         self._hourly_profiles = profiles
 
     def _calculate_seasonal_factors(self, data: pd.DataFrame) -> None:
-        """Calculate seasonal adjustment factors"""
         data = data.copy()
         data["month"] = data["충전시작일시"].dt.month
 
@@ -256,7 +256,6 @@ class StatisticalPredictor:
         self._seasonal_factors = seasonal_factors
 
     def _get_hourly_base_power(self, hour: int, weekday: int) -> float:
-        """Get base power prediction for given hour and weekday"""
         if not self._hourly_profiles:
             return 33.5  # Default fallback
 
@@ -266,7 +265,6 @@ class StatisticalPredictor:
         return profile.get("p95", profile.get("mean", 33.5))
 
     def _get_prediction_std(self, hour: int, weekday: int) -> float:
-        """Get standard deviation for confidence interval calculation"""
         if not self._hourly_profiles:
             return 10.0  # Default fallback
 
@@ -274,7 +272,6 @@ class StatisticalPredictor:
         return profile.get("std", 10.0)
 
     def _calculate_confidence(self, hour: int, weekday: int) -> float:
-        """Calculate prediction confidence based on data availability"""
         if not self._hourly_profiles:
             return 0.7
 
@@ -292,9 +289,12 @@ class StatisticalPredictor:
             return 0.6
 
     def _generate_contract_reasoning(
-        self, predicted_peak: float, recommended_contract: int, seasonal_factor: float, month: int
+        self,
+        predicted_peak: float,
+        recommended_contract: int,
+        seasonal_factor: float,
+        month: int,
     ) -> str:
-        """Generate reasoning for contract recommendation"""
         reasons = []
 
         # Historical data analysis
@@ -305,7 +305,14 @@ class StatisticalPredictor:
 
         # Seasonal adjustment
         if seasonal_factor > 1.05:
-            season_name = {12: "겨울", 1: "겨울", 2: "겨울", 6: "여름", 7: "여름", 8: "여름"}.get(month, "계절성")
+            season_name = {
+                12: "겨울",
+                1: "겨울",
+                2: "겨울",
+                6: "여름",
+                7: "여름",
+                8: "여름",
+            }.get(month, "계절성")
             reasons.append(f"{season_name} 계절 특성 반영")
 
         # Safety margin

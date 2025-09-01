@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BNS0061 충전소 데이터 로딩 디버그 스크립트"""
+
 
 import sys
 import os
@@ -8,7 +8,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'backend', 'app'))
 from backend.app.data.loader import ChargingDataLoader
 
 def debug_station_data(station_id="BNS0061"):
-    """충전소 데이터 로딩 디버그"""
+    
     print(f"=== 충전소 {station_id} 데이터 로딩 디버그 ===\n")
     
     try:
