@@ -1,9 +1,8 @@
 <script>
 	import { onMount, onDestroy } from 'svelte';
-	import { Chart, registerables } from 'chart.js';
-	import zoomPlugin from 'chartjs-plugin-zoom';
 	
-	Chart.register(...registerables, zoomPlugin);
+	// Chart.js는 클라이언트에서만 동적 로드
+	let Chart;
 	
 	export let data = [];
 	
@@ -11,13 +10,28 @@
 	let chart;
 	
 	export function resetZoom() {
-		if (chart) {
+		if (typeof window !== 'undefined' && chart) {
 			chart.resetZoom();
 		}
 	}
 	
-	onMount(() => {
-		initChart();
+	onMount(async () => {
+		// 브라우저 환경에서만 실행
+		if (typeof window === 'undefined') return;
+		
+		try {
+			// 최적화된 Chart.js 모듈 로드
+			const { getChartModules } = await import('../../lib/chart-utils.js');
+			const modules = await getChartModules();
+			
+			if (modules) {
+				Chart = modules.Chart;
+				// 차트 초기화
+				initChart();
+			}
+		} catch (error) {
+			console.error('Chart.js 로드 실패:', error);
+		}
 	});
 	
 	onDestroy(() => {
@@ -26,11 +40,14 @@
 		}
 	});
 	
-	$: if (chart && data) {
+	$: if (typeof window !== 'undefined' && chart && data) {
 		updateChart();
 	}
 	
 	function initChart() {
+		// 브라우저 환경 체크
+		if (typeof window === 'undefined' || !Chart || !canvas) return;
+		
 		const ctx = canvas.getContext('2d');
 		
 		chart = new Chart(ctx, {

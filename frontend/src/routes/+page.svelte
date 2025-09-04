@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { stations, isLoading, isLoadingMore, error, stationActions, pagination, requiresUpload, hasData } from '../stores/stationStore.ts';
 	import { uiActions } from '../stores/uiStore.ts';
+	import { searchQuery, sortBy, sortOrder, filteredStations, searchActions } from '../stores/searchStore.ts';
 	import LoadingSpinner from '../components/LoadingSpinner.svelte';
 	import ThemeToggle from '../components/ThemeToggle.svelte';
 	import FileUpload from '../lib/components/FileUpload.svelte';
@@ -12,12 +13,7 @@
 
 	let scrollContainer;
 	
-	// Search and sort state variables
-	let searchQuery = '';
-	let sortBy = 'id';
-	let sortOrder = 'asc';
-	
-	// Debounce timer for search
+	// Debounce timer for search (클라이언트 사이드 검색이므로 더 짧은 디바운스)
 	let searchTimeout;
 	
 	onMount(async () => {
@@ -67,46 +63,47 @@
 		uiActions.showNotification('로드 중...', 'info');
 	}
 	
-	function handleSearch() {
-		stationActions.loadStations(true, searchQuery || undefined, sortBy, sortOrder);
+	// 클라이언트 사이드 검색 핸들러
+	function handleSearch(query) {
+		searchActions.updateSearch(query);
 	}
 	
-	// Debounced search function
-	function debouncedSearch() {
+	// 더 빠른 디바운스 (클라이언트 사이드이므로 50ms로 단축)
+	function debouncedSearch(query) {
 		if (searchTimeout) {
 			clearTimeout(searchTimeout);
 		}
 		searchTimeout = setTimeout(() => {
-			handleSearch();
-		}, 300); // 300ms delay
+			handleSearch(query);
+		}, 50); // 50ms delay
 	}
 	
-	function handleSortChange() {
-		stationActions.loadStations(true, searchQuery || undefined, sortBy, sortOrder);
+	function handleSortChange(field, order) {
+		searchActions.updateSort(field, order);
 	}
 	
 	function clearSearch() {
-		searchQuery = '';
-		stationActions.loadStations(true, undefined, sortBy, sortOrder);
+		$searchQuery = '';
+		searchActions.clearSearch();
 	}
 	
-	// Reactive statements for auto-search and sort (브라우저에서만 실행)
-	$: if (browser && searchQuery !== undefined) {
-		debouncedSearch();
+	// Reactive statements (클라이언트 사이드 검색으로 즉시 반응)
+	$: if (browser && $searchQuery !== undefined) {
+		debouncedSearch($searchQuery);
 	}
 	
-	$: if (browser && (sortBy || sortOrder)) {
-		handleSearch();
+	$: if (browser && ($sortBy || $sortOrder)) {
+		handleSortChange($sortBy, $sortOrder);
 	}
 
 
 	const stationCount = tweened(0, { duration: 500, easing: cubicOut });
 
-	// 총 세션 수 집계
-	$: totalSessions = ($stations || []).reduce((sum, s) => sum + (s?.data_sessions || 0), 0);
+	// 총 세션 수 집계 (필터링된 결과 기준)
+	$: totalSessions = ($filteredStations || []).reduce((sum, s) => sum + (s?.data_sessions || 0), 0);
 
-	// 스테이션 수가 바뀔 때 애니메이션
-	$: stationCount.set(($stations || []).length);
+	// 필터링된 스테이션 수가 바뀔 때 애니메이션
+	$: stationCount.set(($filteredStations || []).length);
 </script>
 
 <svelte:head>
@@ -117,7 +114,7 @@
 	<div class="header">
 		<div class="header-content">
 			<div class="header-text">
-				<h1 class="blue-header">블루네트웍스 충전소 전력 예측 시스템</h1>
+				<h1>블루네트웍스 충전소 전력 예측 시스템</h1>
 			</div>
 			<div class="header-actions">
 				<ThemeToggle />
@@ -243,14 +240,14 @@
 					type="text"
 					class="search-input"
 					placeholder="충전소 ID, 이름, 위치로 검색"
-					bind:value={searchQuery}
+					bind:value={$searchQuery}
 				/>
 				{#if $isLoading}
 					<div class="search-loading">
 						<LoadingSpinner size="small" />
 					</div>
 				{/if}
-				{#if searchQuery}
+				{#if $searchQuery}
 					<button class="clear-button" on:click={clearSearch} title="검색어 지우기">
 						✕
 					</button>
@@ -268,8 +265,7 @@
             <select
                 id="sort-by-select"
                 class="select"
-                bind:value={sortBy}
-                on:change={handleSortChange}
+                bind:value={$sortBy}
                 aria-label="정렬 기준 선택"
             >
                 <option value="id">ID</option>
@@ -294,9 +290,9 @@
                 <button
                     type="button"
                     class="toggle-option"
-                    class:active={sortOrder === 'asc'}
-                    aria-pressed={sortOrder === 'asc'}
-                    on:click={() => (sortOrder = 'asc')}
+                    class:active={$sortOrder === 'asc'}
+                    aria-pressed={$sortOrder === 'asc'}
+                    on:click={() => ($sortOrder = 'asc')}
                     title="오름차순 정렬"
                 >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -307,9 +303,9 @@
                 <button
                     type="button"
                     class="toggle-option"
-                    class:active={sortOrder === 'desc'}
-                    aria-pressed={sortOrder === 'desc'}
-                    on:click={() => (sortOrder = 'desc')}
+                    class:active={$sortOrder === 'desc'}
+                    aria-pressed={$sortOrder === 'desc'}
+                    on:click={() => ($sortOrder = 'desc')}
                     title="내림차순 정렬"
                 >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -329,7 +325,7 @@
 			<LoadingSpinner size="large" />
 			<p>충전소 정보를 로드하는 중...</p>
 		</div>
-	{:else if $stations.length === 0}
+	{:else if $filteredStations.length === 0}
 		<div class="empty-state">
 			<h3>📂 충전소 데이터가 없습니다</h3>
 			<p>파일을 업로드하거나 서버 연결을 확인해보세요.</p>
@@ -341,7 +337,7 @@
 		</div>
 	{:else}
 		<div class="station-grid" bind:this={scrollContainer}>
-			{#each $stations as station (station.id)}
+			{#each $filteredStations as station (station.id)}
 				<div class="station-card">
 						<div class="station-identity">
 							<h3 class="station-name" title="{station.name}">{station.name}</h3>
@@ -432,9 +428,13 @@
 					<LoadingSpinner />
 					<p>더 많은 충전소를 불러오는 중...</p>
 				</div>
-			{:else if !$pagination.hasNext && $stations.length > 0}
+			{:else if !$pagination.hasNext && $filteredStations.length > 0}
 				<div class="end-message">
-					<p>총 {$pagination.total}개소의 충전소가 로드되었습니다.</p>
+					{#if $searchQuery}
+						<p>검색 결과: {$filteredStations.length}개소 (전체 {$pagination.total}개소 중)</p>
+					{:else}
+						<p>총 {$pagination.total}개소의 충전소가 로드되었습니다.</p>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -446,8 +446,8 @@
 	.header {
 		margin-bottom: 40px;
 		padding: 40px 20px;
-		background: white;
-		color: #374151;
+		background: var(--gradient-primary);
+		color: white;
 		border-radius: 16px;
 		box-shadow: 0 8px 32px var(--shadow);
 	}
@@ -468,27 +468,6 @@
 		margin: 0 0 10px 0;
 		font-size: 2.5em;
 		font-weight: 700;
-	}
-	
-	.header h1.blue-header {
-		color: #3b82f6;
-		background: linear-gradient(135deg, #3b82f6, #1d4ed8);
-		-webkit-background-clip: text;
-		-webkit-text-fill-color: transparent;
-		background-clip: text;
-		position: relative;
-		padding-bottom: 12px;
-	}
-	
-	.header h1.blue-header::after {
-		content: '';
-		position: absolute;
-		bottom: 0;
-		left: 0;
-		width: 80px;
-		height: 4px;
-		background: linear-gradient(135deg, #3b82f6, #1d4ed8);
-		border-radius: 2px;
 	}
 	
 	.header p {

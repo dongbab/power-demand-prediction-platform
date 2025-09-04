@@ -29,28 +29,28 @@
         { value: "365days", label: "1년" },
     ];
 
-    // Chart.js는 클라이언트에서만 동적 로드
     let Chart;
     let chart; // 차트 인스턴스
 
     onMount(async () => {
+        // 브라우저 환경에서만 실행
+        if (typeof window === 'undefined') return;
+        
         try {
             // Chart.js와 time adapter, zoom plugin 로드 (클라이언트 전용)
-            const [{ default: ChartJS }, { default: zoomPlugin }] =
+            const [{ default: ChartJS }, dateAdapter, zoomPlugin] =
                 await Promise.all([
                     import("chart.js/auto"),
                     import("chartjs-adapter-date-fns"),
                     import("chartjs-plugin-zoom"),
                 ]);
             Chart = ChartJS;
-            Chart.register(zoomPlugin);
+            Chart.register(zoomPlugin.default);
 
-            // 초기 데이터 로드
-            if (stationId) {
-                await updateEnergyForecast();
-            }
-            // 5분마다 갱신
-            refreshInterval = setInterval(updateEnergyForecast, 5 * 60 * 1000);
+            // reactive statement에서 stationId 변경 시 자동으로 데이터 로드됨
+            console.log('PowerDemandPredictor onMount: Chart.js 로드 완료, stationId =', stationId);
+            // 60분마다 갱신
+            refreshInterval = setInterval(updateEnergyForecast, 60 * 60 * 1000);
         } catch (error) {}
     });
 
@@ -69,14 +69,18 @@
 
     async function updateEnergyForecast() {
         if (!stationId) {
+            console.log('PowerDemandPredictor: stationId가 없습니다');
             return;
         }
 
+        console.log('🚀 PowerDemandPredictor: 데이터 로딩 시작, stationId:', stationId);
+        console.log('현재 selectedTimeframe:', selectedTimeframe);
         isLoading = true;
 
         try {
             const days = parseInt(selectedTimeframe.replace("days", ""));
             const url = `/api/stations/${encodeURIComponent(stationId)}/energy-demand-forecast?days=${days}`;
+            console.log('📡 API 호출 URL:', url);
 
             const response = await fetch(url, {
                 cache: "no-cache",
@@ -89,147 +93,220 @@
 
             if (!response.ok) {
                 const errorText = await response.text();
+                console.error(`API 호출 실패: ${response.status} ${response.statusText}`, errorText);
                 throw new Error(
                     `API 호출 실패: ${response.status} ${response.statusText}`
                 );
             }
 
             const result = await response.json();
+            console.log('API 응답:', result);
+            console.log('에너지 통계:', result?.energy_statistics);
 
-            if (
-                result.success &&
-                result.energy_statistics &&
-                result.data_range
-            ) {
-                energyForecast = result;
+            console.log('API 응답 전체:', result);
+            console.log('result.success:', result.success);
+            console.log('result.timeseries_data:', result.timeseries_data?.length);
+
+            if (result.success && result.timeseries_data) {
+                energyForecast = {
+                    daily_consumption: result.timeseries_data,
+                    energy_statistics: result.energy_statistics,
+                    monthly_summary: result.monthly_summary,
+                    insights: result.insights,
+                    growth_rate: result.growth_rate
+                };
+                console.log('🎯 energyForecast 생성됨:', energyForecast);
+                console.log('🎯 daily_consumption 길이:', energyForecast.daily_consumption.length);
+
+                console.log('✅ energyForecast 설정 완료');
+                console.log('📊 데이터 개수:', energyForecast.daily_consumption.length, '개');
+                console.log('📈 에너지 통계:', energyForecast.energy_statistics);
 
                 // 실제 데이터 범위 설정
                 dataRange = {
                     startDate: new Date(result.data_range.start_date),
                     endDate: new Date(result.data_range.end_date),
-                    recordCount: result.data_range.total_records,
+                    recordCount: result.timeseries_data.length,
                 };
+                
+                console.log('📅 dataRange 설정됨:', dataRange);
+                console.log('📅 startDate:', dataRange.startDate);
+                console.log('📅 endDate:', dataRange.endDate);
 
-                // DOM 업데이트 보장 후 차트 생성
-                await tick();
-                setTimeout(createEnergyChart, 100);
+                lastUpdated = new Date();
             } else {
-                energyForecast = null;
-                dataRange = {
-                    startDate: null,
-                    endDate: null,
-                    recordCount: 0,
-                };
+                throw new Error(result.error || "에너지 예측 실패");
             }
-
-            lastUpdated = new Date();
         } catch (error) {
+            console.error('Energy forecast 데이터 로드 실패:', error);
             energyForecast = null;
+            dataRange = {
+                startDate: null,
+                endDate: null,
+                recordCount: 0,
+            };
         } finally {
             isLoading = false;
         }
     }
 
-    async function createEnergyChart() {
-        // DOM 요소가 실제로 렌더링되었는지 확인
-        await tick();
+    function resetZoom() {
+        if (typeof window !== 'undefined' && chart) {
+            chart.resetZoom();
+        }
+    }
 
-        // 1. Canvas 컨테이너 확인
-        if (!chartContainer) {
-            return false;
+    // Reactive 데이터 변경 감지 -> 차트 업데이트
+    $: if (
+        typeof window !== 'undefined' &&
+        energyForecast &&
+        energyForecast.daily_consumption &&
+        energyForecast.daily_consumption.length > 0 &&
+        Chart &&
+        chartContainer
+    ) {
+        console.log('🔄 차트 업데이트 조건 만족 - 차트 생성 시작');
+        // DOM이 업데이트될 때까지 기다린 후 차트 생성/업데이트
+        tick().then(() => {
+            setTimeout(() => {
+                console.log('📊 createChart() 호출');
+                createChart();
+            }, 100);
+        });
+    } else if (typeof window !== 'undefined') {
+        console.log('❌ 차트 업데이트 조건 미충족:', {
+            energyForecast: !!energyForecast,
+            daily_consumption: !!energyForecast?.daily_consumption,
+            daily_consumption_length: energyForecast?.daily_consumption?.length || 0,
+            Chart: !!Chart,
+            chartContainer: !!chartContainer
+        });
+    }
+
+    function fmtDate(d) {
+        if (!d) return "-";
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const da = String(d.getDate()).padStart(2, "0");
+        return `${y}-${m}-${da}`;
+    }
+
+    function createChart() {
+        // 브라우저 환경 체크
+        if (typeof window === 'undefined') return;
+        
+        if (!chartContainer || !Chart || !energyForecast?.daily_consumption) {
+            console.log('차트 생성 실패: 요구사항 미충족', {
+                chartContainer: !!chartContainer,
+                Chart: !!Chart,
+                daily_consumption: !!energyForecast?.daily_consumption
+            });
+            return;
         }
 
-        // 2. Chart.js 라이브러리 확인
-        if (!Chart) {
-            return false;
-        }
-
-        // 3. 에너지 예측 데이터 확인
-        if (!energyForecast) {
-            return false;
-        }
-
-        // 4. DOM 연결 확인
-        if (!chartContainer.parentElement) {
-            return false;
+        // 기존 차트 파괴
+        if (chart) {
+            chart.destroy();
+            chart = null;
         }
 
         try {
-            // 기존 차트 제거
-            if (chart) {
-                chart.destroy();
-                chart = null;
-            }
-
-            // Canvas 컨텍스트 가져오기
             const ctx = chartContainer.getContext("2d");
+            
             if (!ctx) {
-                return false;
+                console.error('캠버스 컨텍스트를 가져올 수 없습니다');
+                return;
             }
 
-            // 실제 데이터 추출
-            let actualData = [];
-            let predictedData = [];
-
-            // API 응답 구조에 따라 데이터 추출
-            if (energyForecast.timeseries_data) {
-                actualData =
-                    energyForecast.timeseries_data.filter(
-                        (d) => d.type === "actual"
-                    ) || [];
-                predictedData =
-                    energyForecast.timeseries_data.filter(
-                        (d) => d.type === "predicted"
-                    ) || [];
-            } else {
-                actualData = energyForecast.actual_data || [];
-                predictedData = energyForecast.predicted_data || [];
+            // 데이터 준비 및 검증
+            const dailyData = energyForecast.daily_consumption;
+            if (!dailyData || dailyData.length === 0) {
+                console.log('차트 데이터가 비어있습니다');
+                return;
             }
 
-            // 데이터가 없으면 차트를 생성하지 않음
-            if (actualData.length === 0 && predictedData.length === 0) {
-                return false;
-            }
+            const actualData = dailyData.filter(item => item.type === 'actual').map(item => ({
+                x: item.date,
+                y: parseFloat(item.energy) || 0,
+            }));
+            
+            const predictedData = dailyData.filter(item => item.type === 'predicted').map(item => ({
+                x: item.date,
+                y: parseFloat(item.energy) || 0,
+            }));
+            
+            console.log('실제 데이터:', actualData.slice(0, 3));
+            console.log('예측 데이터:', predictedData.slice(0, 3));
 
-            // Chart.js 설정
-            const chartConfig = {
+            chart = new Chart(ctx, {
                 type: "line",
                 data: {
                     datasets: [
                         {
-                            label: "실제 에너지 소비 (kWh)",
-                            data: actualData.map((d) => ({
-                                x: d.date,
-                                y: d.energy,
-                            })),
-                            borderColor: "#4caf50",
-                            backgroundColor: "rgba(76, 175, 80, 0.1)",
-                            fill: false,
+                            label: "실제 데이터 (kWh)",
+                            data: actualData,
+                            borderColor: "#2563eb",
+                            backgroundColor: "rgba(37, 99, 235, 0.1)",
                             borderWidth: 2,
-                            tension: 0.2,
                             pointRadius: 3,
-                            pointHoverRadius: 5,
+                            pointHoverRadius: 6,
+                            fill: false,
+                            tension: 0.1,
                         },
                         {
-                            label: "예측 에너지 소비 (kWh)",
-                            data: predictedData.map((d) => ({
-                                x: d.date,
-                                y: d.energy,
-                            })),
-                            borderColor: "#2196f3",
-                            backgroundColor: "rgba(33, 150, 243, 0.1)",
-                            fill: false,
+                            label: "예측 데이터 (kWh)",
+                            data: predictedData,
+                            borderColor: "#f59e0b",
+                            backgroundColor: "rgba(245, 158, 11, 0.1)",
                             borderWidth: 2,
-                            borderDash: [8, 4],
-                            tension: 0.2,
                             pointRadius: 3,
-                            pointHoverRadius: 5,
+                            pointHoverRadius: 6,
+                            fill: false,
+                            tension: 0.1,
+                            borderDash: [5, 5], // 점선으로 예측 데이터 표시
                         },
                     ],
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    interaction: {
+                        mode: "index",
+                        intersect: false,
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                        },
+                        tooltip: {
+                            backgroundColor: "rgba(0,0,0,0.8)",
+                            titleColor: "#fff",
+                            bodyColor: "#fff",
+                            borderColor: "#2563eb",
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function (context) {
+                                    return `${context.parsed.y.toFixed(2)}kWh`;
+                                },
+                            },
+                        },
+                        zoom: {
+                            pan: {
+                                enabled: true,
+                                mode: "x",
+                            },
+                            zoom: {
+                                wheel: {
+                                    enabled: true,
+                                },
+                                pinch: {
+                                    enabled: true,
+                                },
+                                mode: "x",
+                            },
+                        },
+                    },
                     scales: {
                         x: {
                             type: "time",
@@ -242,6 +319,14 @@
                             title: {
                                 display: true,
                                 text: "날짜",
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#e5e7eb' : '#374151',
+                                font: { size: 14, weight: "bold" },
+                            },
+                            grid: { 
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0,0,0,0.1)' 
+                            },
+                            ticks: {
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#d1d5db' : '#4b5563',
                             },
                         },
                         y: {
@@ -249,52 +334,61 @@
                             title: {
                                 display: true,
                                 text: "전력량 (kWh)",
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#e5e7eb' : '#374151',
+                                font: { size: 14, weight: "bold" },
                             },
-                        },
-                    },
-                    plugins: {
-                        legend: {
-                            position: "top",
-                        },
-                        tooltip: {
-                            mode: "index",
-                            intersect: false,
-                        },
-                        zoom: {
-                            limits: {
-                                x: { min: "original", max: "original" },
-                                y: { min: "original", max: "original" },
+                            grid: { 
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0,0,0,0.1)' 
                             },
-                            pan: {
-                                enabled: true,
-                                mode: "xy",
-                            },
-                            zoom: {
-                                wheel: {
-                                    enabled: true,
-                                    speed: 0.1,
+                            ticks: {
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#d1d5db' : '#4b5563',
+                                callback: function (value) {
+                                    return value + "kWh";
                                 },
-                                pinch: {
-                                    enabled: true,
-                                },
-                                mode: "xy",
                             },
                         },
                     },
                 },
-            };
-
-            chart = new Chart(ctx, chartConfig);
-
-            return true;
+            });
         } catch (error) {
-            return false;
+            console.error("차트 생성 실패:", error);
         }
     }
+    
+    // 차트 컴포넌트가 마운트된 후 초기 차트 생성 시도
+    $: if (typeof window !== 'undefined' && chartContainer && energyForecast && Chart) {
+        setTimeout(() => {
+            createChart();
+        }, 200);
+    }
 
-    function resetZoom() {
-        if (chart) {
-            chart.resetZoom();
+    // stationId가 변경될 때마다 데이터 로드 (브라우저에서만)
+    $: if (typeof window !== 'undefined' && stationId && stationId.trim()) {
+        console.log('PowerDemandPredictor: stationId 변경됨:', stationId);
+        updateEnergyForecast();
+    } else if (typeof window !== 'undefined') {
+        console.log('PowerDemandPredictor: stationId가 유효하지 않음:', stationId);
+    }
+
+    // 차트 표시 조건 디버깅
+    $: {
+        if (typeof window !== 'undefined') {
+            console.log('📊 차트 표시 조건 체크:', {
+                energyForecast: !!energyForecast,
+                isLoading,
+                hasDaily: !!(energyForecast?.daily_consumption && energyForecast.daily_consumption.length > 0),
+                Chart: !!Chart,
+                chartContainer: !!chartContainer,
+                dailyConsumptionLength: energyForecast?.daily_consumption?.length || 0
+            });
+            
+            if (energyForecast && !isLoading) {
+                console.log('✅ 차트 데이터 준비 완료 - 차트가 표시되어야 함');
+            } else if (isLoading) {
+                console.log('⏳ 로딩 중...');
+            } else if (!energyForecast) {
+                console.log('❌ energyForecast 데이터 없음');
+            }
         }
     }
 
@@ -302,6 +396,7 @@
     let initialized = false;
     $: {
         if (selectedTimeframe && initialized && stationId) {
+            console.log('PowerDemandPredictor: timeframe 변경됨:', selectedTimeframe);
             updateEnergyForecast();
         }
     }
@@ -316,8 +411,62 @@
     $: growthRate = energyForecast?.growth_rate || 0;
     $: averageDemand = analysis?.current_statistics?.avg_power || 0;
     $: peakDemand = analysis?.predictions?.peak_power || 0;
-    $: recommendedContract =
-        analysis?.contract_power_recommendation?.recommended_contract_kw || 0;
+    
+    // 전력량 예측 기간 설정 (사용자가 선택 가능)
+    let energyForecastPeriod = "daily"; // daily, weekly, monthly
+    const forecastPeriods = [
+        { value: "daily", label: "일간", multiplier: 1 },
+        { value: "weekly", label: "주간", multiplier: 7 },
+        { value: "monthly", label: "월간", multiplier: 30 }
+    ];
+
+    // 예상 전력량 수요를 기간별로 계산 (kWh) - API 데이터 기반
+    $: predictedEnergyDemand = (() => {
+        if (!energyForecast?.energy_statistics) {
+            console.log('❌ energy_statistics 없음');
+            return 0;
+        }
+
+        const stats = energyForecast.energy_statistics;
+        const avgDaily = stats.avg_daily || 0;
+        const currentPeriod = forecastPeriods.find(p => p.value === energyForecastPeriod);
+        
+        console.log('📊 전력량 계산:', {
+            avgDaily,
+            currentPeriod,
+            energyForecastPeriod
+        });
+        
+        if (!currentPeriod || avgDaily === 0) {
+            return 0;
+        }
+
+        // 기간별 예상 전력량 계산
+        let baseEnergyDemand = avgDaily * currentPeriod.multiplier;
+        
+        // 성장률 반영 (향후 예측 조정)
+        if (growthRate > 0) {
+            baseEnergyDemand *= (1 + growthRate / 100 * 0.5); // 50% 가중치로 성장률 반영
+        }
+        
+        // 계절성 요인 (현재 월 기준)
+        const currentMonth = new Date().getMonth() + 1;
+        let seasonalFactor = 1.0;
+        
+        if (currentMonth >= 6 && currentMonth <= 8) {
+            // 여름철 (6-8월): 에어컨 사용으로 전력 수요 증가
+            seasonalFactor = 1.15;
+        } else if (currentMonth === 12 || currentMonth <= 2) {
+            // 겨울철 (12-2월): 난방으로 전력 수요 증가
+            seasonalFactor = 1.1;
+        }
+        
+        const finalEnergyDemand = baseEnergyDemand * seasonalFactor;
+        
+        const result = Math.round(finalEnergyDemand * 10) / 10;
+        console.log('💡 최종 예측 전력량:', result, 'kWh');
+        return result;
+    })();
 
     const MAX_INSIGHTS_PREVIEW = 5;
     let showAllInsights = false;
@@ -331,64 +480,17 @@
 </script>
 
 <div class="demand-predictor">
-    <div class="component-header">
-        <div class="data-range">
-            {#if dataRange.startDate && dataRange.endDate}
-                <div class="range-pill">
-                    <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                    >
-                        <rect
-                            x="3"
-                            y="4"
-                            width="18"
-                            height="18"
-                            rx="2"
-                            ry="2"
-                        />
-                        <line x1="16" y1="2" x2="16" y2="6" />
-                        <line x1="8" y1="2" x2="8" y2="6" />
-                        <line x1="3" y1="10" x2="21" y2="10" />
-                    </svg>
-                    <span
-                        >{dataRange.startDate.toLocaleDateString()} ~ {dataRange.endDate.toLocaleDateString()}</span
-                    >
-                </div>
-                <div class="records-pill">
-                    <svg
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                    >
-                        <path
-                            d="M9 11H15M9 15H15M17 21H7C6.46957 21 5.96086 20.7893 5.58579 20.4142C5.21071 20.0391 5 19.5304 5 19V5C5 4.46957 5.21071 3.96086 5.58579 3.58579C5.96086 3.21071 6.46957 3 7 3H12.5858C12.851 3 13.1054 3.10536 13.2929 3.29289L16.7071 6.70711C16.8946 6.89464 17 7.149 17 7.41421V19C17 19.5304 16.7893 20.0391 16.4142 20.4142C16.0391 20.7893 15.5304 21 15 21H7Z"
-                        />
-                    </svg>
-                    <span>{dataRange.recordCount}건</span>
-                </div>
-            {/if}
-        </div>
 
-        <div class="controls">
-            <select bind:value={selectedTimeframe} class="timeframe-select">
-                {#each timeframes as timeframe}
-                    <option value={timeframe.value}>{timeframe.label}</option>
+
+    <!-- 전력량 예측 기간 선택 -->
+    <div class="forecast-period-selector">
+        <div class="selector-header">
+            <h3>전력량 수요 예측 기간</h3>
+            <select bind:value={energyForecastPeriod} class="period-select">
+                {#each forecastPeriods as period}
+                    <option value={period.value}>{period.label} 예측</option>
                 {/each}
             </select>
-            <div class="last-updated">
-                {#if isLoading}
-                    <LoadingSpinner size="small" />
-                    <span>분석 중...</span>
-                {:else if lastUpdated}
-                    <span
-                        >마지막 업데이트: {lastUpdated.toLocaleTimeString()}</span
-                    >
-                {/if}
-            </div>
         </div>
     </div>
 
@@ -398,114 +500,159 @@
             value={averageDailyEnergy}
             unit="kWh"
             type="energy"
+            tooltip="선택된 기간 동안의 일일 평균 에너지 소비량"
         />
         <MetricCard
-            title="총 에너지 소비"
+            title="총 에너지"
             value={totalEnergy}
             unit="kWh"
             type="total"
+            tooltip="선택된 기간 동안의 총 에너지 소비량"
         />
-        <MetricCard title="성장률" value={growthRate} unit="%" type="growth" />
-        {#if energyForecast?.energy_statistics}
-            <MetricCard
-                title="최대 일소비"
-                value={energyForecast.energy_statistics.max_daily}
-                unit="kWh"
-                type="peak"
-            />
-        {/if}
+        <MetricCard
+            title="증가율"
+            value={growthRate}
+            unit="%"
+            type="growth"
+            tooltip="전 기간 대비 에너지 소비 증가율"
+        />
+        <MetricCard
+            title="예상 {forecastPeriods.find(p => p.value === energyForecastPeriod)?.label || '일간'} 전력량 수요"
+            value={predictedEnergyDemand}
+            unit="kWh"
+            type={predictedEnergyDemand >= 200 ? "contract-high" : predictedEnergyDemand >= 100 ? "contract-medium" : "contract-low"}
+            highlighted={true}
+            tooltip="에너지 사용 패턴과 성장률을 기반으로 한 {forecastPeriods.find(p => p.value === energyForecastPeriod)?.label || '일간'} 전력량 예측"
+        />
     </div>
 
-    <div class="chart-section">
-        {#if isLoading}
+    {#if energyForecast && !isLoading}
+        <div class="chart-container-wrapper">
+            <div class="chart-header">
+                <h3>일일 전력량 소비 추이</h3>
+                <div class="chart-meta">
+                    {#if dataRange.startDate && dataRange.endDate}
+                        <div class="data-info">
+                            <div class="data-period">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M8 2v4"></path>
+                                    <path d="M16 2v4"></path>
+                                    <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+                                    <path d="M3 10h18"></path>
+                                </svg>
+                                <span>{dataRange.startDate.toLocaleDateString()} ~ {dataRange.endDate.toLocaleDateString()}</span>
+                            </div>
+                            <div class="data-stats">
+                                <span class="stat-badge">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M12 20V10"></path>
+                                        <path d="M18 20V4"></path>
+                                        <path d="M6 20v-6"></path>
+                                    </svg>
+                                    {dataRange.recordCount.toLocaleString()}개
+                                </span>
+                                <span class="duration-badge">
+                                    {Math.ceil((dataRange.endDate - dataRange.startDate) / (1000 * 60 * 60 * 24))}일
+                                </span>
+                            </div>
+                        </div>
+                    {:else}
+                        <div class="no-data-info">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                                <line x1="12" y1="9" x2="12" y2="13"></line>
+                                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                            </svg>
+                            <span>충전소 {stationId} 데이터 미발견</span>
+                        </div>
+                    {/if}
+                    {#if lastUpdated}
+                        <div class="last-updated-info">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12,6 12,12 16,14"></polyline>
+                            </svg>
+                            <span>마지막 업데이트 : {lastUpdated.toLocaleTimeString()}</span>
+                        </div>
+                    {/if}
+                    <div class="chart-controls">
+                        <select bind:value={selectedTimeframe} class="timeframe-select-chart">
+                            {#each timeframes as timeframe}
+                                <option value={timeframe.value}>{timeframe.label}</option>
+                            {/each}
+                        </select>
+                        <button class="zoom-reset-btn" on:click={resetZoom}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M3 3v18h18" />
+                                <path d="M18.5 9.5L12 16l-4-4-3.5 3.5" />
+                            </svg>
+                            원래대로
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="chart-container">
+                <canvas bind:this={chartContainer}></canvas>
+            </div>
+        </div>
+    {:else if isLoading}
+        <div class="chart-container-wrapper">
             <div class="chart-loading">
-                <LoadingSpinner size="large" />
-                <p>데이터를 불러오는 중...</p>
+                <LoadingSpinner />
+                <p>에너지 데이터 로딩 중...</p>
             </div>
-        {:else if energyForecast && (energyForecast.actual_data?.length > 0 || energyForecast.predicted_data?.length > 0 || energyForecast.timeseries_data?.length > 0)}
-            <div class="chart-container-wrapper">
-                <div class="chart-header">
-                    <h3>전력량 수요 추이</h3>
-                    <button
-                        class="zoom-reset-btn"
-                        on:click={resetZoom}
-                        title="줌 초기화"
-                    >
-                        원래대로
-                    </button>
-                </div>
-                <div
-                    class="chart-container"
-                    style="position: relative; height: 400px; width: 100%;"
-                >
-                    <canvas
-                        bind:this={chartContainer}
-                        style="display: block; box-sizing: border-box; height: 400px; width: 100%;"
-                    ></canvas>
-                </div>
-            </div>
-        {:else}
-            <div class="no-data-message">
-                <div class="no-data-icon">📊</div>
+        </div>
+    {:else}
+        <div class="chart-container-wrapper">
+            <div class="no-chart-data">
+                <div class="no-data-icon">📉</div>
                 <h4>차트 데이터 없음</h4>
-                <p>
-                    해당 충전소({stationId})의 에너지 소비 데이터가 CSV에서
-                    발견되지 않았습니다.
-                </p>
+                <p>에너지 소비 데이터를 불러올 수 없습니다.</p>
                 <div class="data-check-info">
-                    <p><strong>확인해주세요!</strong></p>
+                    <p>다음 사항을 확인해주세요</p>
                     <ul>
-                        <li>CSV 파일에 해당 충전소 ID 데이터 존재 여부</li>
-                        <li>해당 충전소의 데이터 기간 범위</li>
-                        <li>데이터 형식 및 필드명 일치 여부</li>
+                        <li>충전소 ID가 올바른지 확인</li>
+                        <li>데이터 파일이 올바르게 업로드되었는지 확인</li>
+                        <li>서버 연결 상태 확인</li>
                     </ul>
                 </div>
             </div>
-        {/if}
-    </div>
-
-    {#if energyForecast && energyForecast.insights && energyForecast.insights.length > 0}
-        <!-- 간결하고 일관된 스타일의 인사이트 섹션 -->
-        <div class="insights-section cohesive">
-            <div class="insights-header">
-                <div class="insights-title-wrap">
-                    <span class="insights-icon">💡</span>
-                    <h3 class="insights-title">참고 사항</h3>
-                </div>
-            </div>
-
-            <div class="insights-list">
-                {#each visibleInsights as insight, index}
-                    <div
-                        class="insight-item card"
-                        style="--delay: {index * 0.06}s"
-                    >
-                        <div class="insight-accent" aria-hidden="true"></div>
-                        <div class="insight-body">
-                            <div class="insight-content">{insight}</div>
-                        </div>
-                    </div>
-                {/each}
-            </div>
-
-            {#if insightsCount > MAX_INSIGHTS_PREVIEW}
-                <div class="insights-footer">
-                    <button
-                        class="btn outline small"
-                        on:click={() => (showAllInsights = !showAllInsights)}
-                    >
-                        {#if showAllInsights}간단히 보기{/if}
-                        {#if !showAllInsights}더 보기 (+{insightsCount -
-                                MAX_INSIGHTS_PREVIEW}){/if}
-                    </button>
-                </div>
-            {/if}
         </div>
+
+        {#if energyForecast && energyForecast.insights && energyForecast.insights.length > 0}
+            <div class="insights-section">
+                <div class="insights-header">
+                    <span class="insights-icon">💡</span>
+                    <h3 class="insights-title">인사이트</h3>
+                </div>
+                <div class="insights-list">
+                    {#each visibleInsights as insight, index}
+                        <div
+                            class="insight-item"
+                            style="--delay: {index * 0.1}s"
+                        >
+                            <span class="insight-bullet">•</span>
+                            <span class="insight-text">{insight}</span>
+                        </div>
+                    {/each}
+                    {#if insightsCount > MAX_INSIGHTS_PREVIEW}
+                        <button
+                            class="show-more-btn"
+                            on:click={() => (showAllInsights = !showAllInsights)}
+                        >
+                            {#if showAllInsights}간단히 보기{/if}
+                            {#if !showAllInsights}더 보기 (+{insightsCount -
+                                    MAX_INSIGHTS_PREVIEW}){/if}
+                        </button>
+                    {/if}
+                </div>
+            </div>
+        {/if}
     {/if}
 
     {#if energyForecast && energyForecast.monthly_summary && energyForecast.monthly_summary.length > 0}
         <div class="monthly-summary">
-            <h3>📅 월별 에너지 소비</h3>
+            <h3>월별 에너지 소비</h3>
             <div class="monthly-grid">
                 {#each energyForecast.monthly_summary.slice(-6) as month}
                     <div class="month-card">
@@ -535,263 +682,171 @@
         transition: all 0.3s ease;
     }
 
-    .component-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 20px;
+    /* 전력량 예측 기간 선택기 */
+    .forecast-period-selector {
         margin-bottom: 24px;
-        padding-bottom: 16px;
-        border-bottom: 1px solid var(--border-color);
-        flex-wrap: wrap;
-    }
-
-    .data-range {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-    }
-
-    .range-pill,
-    .records-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 12px;
-        background: var(--neutral-light);
-        border: 1px solid var(--border-color);
-        border-radius: 20px;
-        font-size: 0.85em;
-        color: var(--text-primary);
-        font-weight: 500;
-    }
-
-    .range-pill svg,
-    .records-pill svg {
-        width: 14px;
-        height: 14px;
-        color: var(--primary-color);
-    }
-
-    .range-pill {
-        background: linear-gradient(
-            135deg,
-            rgba(33, 150, 243, 0.1),
-            rgba(33, 150, 243, 0.05)
-        );
-        border-color: rgba(33, 150, 243, 0.2);
-    }
-
-    .records-pill {
-        background: linear-gradient(
-            135deg,
-            rgba(76, 175, 80, 0.1),
-            rgba(76, 175, 80, 0.05)
-        );
-        border-color: rgba(76, 175, 80, 0.2);
-    }
-
-    .controls {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        width: 100%;
-        justify-content: space-between;
-    }
-
-    .timeframe-select {
-        padding: 6px 10px;
-        border: 2px solid var(--border-color);
-        border-radius: 6px;
+        padding: 16px 20px;
         background: var(--bg-secondary);
-        color: var(--text-primary);
-        cursor: pointer;
-        font-size: 0.8em;
-        min-width: 80px;
-        transition: all 0.3s ease;
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        box-shadow: 0 2px 8px var(--shadow);
     }
 
-    .timeframe-select:focus {
+    .selector-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+
+    .selector-header h3 {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .period-select {
+        padding: 8px 16px;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        font-size: 0.9rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        min-width: 120px;
+    }
+
+    .period-select:hover {
+        border-color: var(--primary-color);
+        box-shadow: 0 2px 8px var(--shadow);
+    }
+
+    .period-select:focus {
         outline: none;
         border-color: var(--primary-color);
+        box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
     }
 
-    .last-updated {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        font-size: 0.75em;
-        color: var(--text-muted);
-        flex-shrink: 0;
-    }
+
+
 
     .metrics-row {
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 10px;
-        margin-bottom: 20px;
-    }
-
-    .insights-section {
-        display: flex;
-        flex-direction: column;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
         gap: 12px;
-    }
-
-    /* Tablet Layout */
-    @media (min-width: 768px) {
-        .demand-predictor {
-            padding: 32px;
-        }
-
-        .component-header {
-            flex-wrap: nowrap;
-            gap: 24px;
-        }
-
-        .data-range {
-            gap: 16px;
-        }
-
-        .range-pill,
-        .records-pill {
-            font-size: 0.9em;
-            padding: 8px 16px;
-        }
-
-        .controls {
-            gap: 16px;
-            width: auto;
-        }
-
-        .timeframe-select {
-            padding: 8px 12px;
-            font-size: 0.9em;
-            min-width: 120px;
-        }
-
-        .last-updated {
-            font-size: 0.9em;
-            gap: 6px;
-        }
-
-        .metrics-row {
-            grid-template-columns: repeat(4, 1fr);
-            gap: 14px;
-            margin-bottom: 24px;
-        }
-
-        .insights-section {
-            gap: 14px;
-        }
-    }
-
-    /* Desktop Layout */
-    @media (min-width: 1024px) {
-        .demand-predictor {
-            padding: 40px;
-        }
-
-        .metrics-row {
-            gap: 16px;
-            margin-bottom: 32px;
-        }
-
-        .insights-section {
-            gap: 16px;
-        }
-    }
-
-    /* 새로운 에너지 차트 및 인사이트 스타일 */
-    .chart-section {
-        background: transparent;
-        border-radius: 0;
-        padding: 0;
-        margin-bottom: 32px;
-        border: none;
-        box-shadow: none;
-    }
-
-    .chart-section h3 {
-        margin: 0 0 20px 0;
-        color: var(--text-primary);
-        font-size: 1.2em;
-        font-weight: 700;
-    }
-
-    .chart-container {
-        position: relative;
-        height: 400px;
-        width: 100%;
-        background: var(--neutral-light);
-        border-radius: 12px;
-        padding: 16px;
-        border: 1px solid var(--border-color);
         margin-bottom: 24px;
     }
 
-    .insights-section {
-        background: transparent;
-        border-radius: 0;
-        padding: 0;
-        margin-bottom: 32px;
-        border: none;
-        box-shadow: none;
-    }
-
-    .insights-section h3 {
-        margin: 0 0 20px 0;
-        color: var(--text-primary);
-        font-size: 1.2em;
-        font-weight: 700;
-    }
-
-    .insights-grid {
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 12px;
-    }
-
-    .insight-card {
-        display: flex;
-        align-items: flex-start;
-        gap: 12px;
-        padding: 16px;
-        background: var(--neutral-light);
-        border-radius: 12px;
-        border-left: 4px solid var(--primary-color);
-        transition:
-            transform 0.2s ease,
-            box-shadow 0.2s ease;
+    .chart-container {
+        height: 350px;
+        width: 100%;
         position: relative;
     }
 
-    .insight-card:hover {
-        transform: translateX(4px);
-        box-shadow: 0 4px 12px var(--shadow);
+    .insights-section {
+        margin: 32px 0;
+        padding: 0;
     }
 
-    .insight-icon {
+    .insights-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 24px;
+        padding-bottom: 12px;
+        border-bottom: 2px solid var(--border-color);
+    }
+
+    .insights-icon {
+        font-size: 1.5em;
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+    }
+
+    .insights-title {
+        margin: 0;
+        color: var(--text-primary);
+        font-size: 1.5em;
+        font-weight: 600;
+        letter-spacing: -0.025em;
+    }
+
+    .insights-list {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+
+    .insight-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 16px;
+        padding: 4px 0;
+        opacity: 0;
+        animation: fadeInUp 0.6s ease forwards;
+        animation-delay: var(--delay);
+    }
+
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    .insight-bullet {
+        color: var(--primary-color);
+        font-weight: bold;
         font-size: 1.2em;
+        line-height: 1.5;
         flex-shrink: 0;
+        margin-top: -2px;
     }
 
     .insight-text {
         color: var(--text-primary);
+        font-size: 1em;
+        line-height: 1.6;
+        font-weight: 400;
+    }
+
+    .show-more-btn {
+        align-self: flex-start;
+        padding: 8px 16px;
+        background: transparent;
+        border: 1px solid var(--primary-color);
+        color: var(--primary-color);
+        border-radius: 6px;
         font-size: 0.9em;
-        line-height: 1.5;
-        font-family: "Consolas", "Monaco", "SF Mono", monospace;
         font-weight: 500;
+        cursor: pointer;
+        transition:
+            background-color 0.2s ease,
+            color 0.2s ease,
+            transform 0.2s ease;
+        margin-top: 8px;
+    }
+
+    .show-more-btn:hover {
+        background: var(--primary-color);
+        color: white;
+        transform: translateY(-1px);
     }
 
     .monthly-summary {
-        background: transparent;
-        border-radius: 0;
-        padding: 0;
-        margin-bottom: 32px;
-        border: none;
-        box-shadow: none;
+        margin: 32px 0;
+        padding: 24px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        box-shadow: 0 2px 8px var(--shadow);
     }
 
     .monthly-summary h3 {
@@ -923,10 +978,10 @@
 
     .chart-header {
         display: flex;
-        justify-content: space-between;
-        align-items: center;
+        flex-direction: column;
+        gap: 12px;
         margin-bottom: 16px;
-        padding-bottom: 12px;
+        padding-bottom: 16px;
         border-bottom: 1px solid var(--border-color);
     }
 
@@ -936,6 +991,103 @@
         font-weight: 600;
         color: var(--text-primary);
     }
+
+    .chart-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+
+    .data-info {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+
+    .data-period {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--text-primary);
+        font-size: 0.9rem;
+    }
+
+    .data-stats {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .stat-badge, .duration-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        font-weight: 500;
+    }
+
+    .stat-badge {
+        background: rgba(16, 185, 129, 0.1);
+        color: #059669;
+        border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
+    .duration-badge {
+        background: rgba(99, 102, 241, 0.1);
+        color: #4f46e5;
+        border: 1px solid rgba(99, 102, 241, 0.2);
+    }
+
+    .no-data-info {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #f59e0b;
+        font-size: 0.9rem;
+        font-weight: 500;
+    }
+
+    .last-updated-info {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+    }
+
+    .chart-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .timeframe-select-chart {
+        padding: 6px 12px;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        font-size: 0.85rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .timeframe-select-chart:hover {
+        border-color: var(--primary-color);
+        box-shadow: 0 2px 4px var(--shadow);
+    }
+
+    .timeframe-select-chart:focus {
+        outline: none;
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+    }
+
 
     .zoom-reset-btn {
         display: flex;
@@ -961,6 +1113,35 @@
     .zoom-reset-btn svg {
         width: 16px;
         height: 16px;
+    }
+
+    /* 다크모드 지원 */
+    :global([data-theme="dark"]) .data-info-card {
+        --bg-secondary: #1f2937;
+        --border-color: #374151;
+        --shadow: rgba(0, 0, 0, 0.3);
+        --shadow-hover: rgba(0, 0, 0, 0.5);
+        --text-primary: #f9fafb;
+        --text-secondary: #d1d5db;
+        --primary-color: #6366f1;
+    }
+
+    /* 라이트모드 지원 */
+    :global([data-theme="light"]) .data-info-card {
+        --bg-secondary: #ffffff;
+        --border-color: rgba(0, 0, 0, 0.1);
+        --shadow: rgba(0, 0, 0, 0.05);
+        --shadow-hover: rgba(0, 0, 0, 0.15);
+        --text-primary: #111827;
+        --text-secondary: #6b7280;
+        --primary-color: #4f46e5;
+    }
+
+    /* 애니메이션 최적화 */
+    @media (prefers-reduced-motion: reduce) {
+        .data-info-card {
+            transition: none !important;
+        }
     }
 
     /* 태블릿 반응형 */
@@ -996,296 +1177,41 @@
         }
     }
 
-    /* Modern Insights Section Styles */
-    .insights-section {
-        margin: 32px 0;
-        padding: 0;
-    }
-
-    .insights-header {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 24px;
-        padding-bottom: 12px;
-        border-bottom: 2px solid var(--border-color);
-    }
-
-    .insights-icon {
-        font-size: 1.5em;
-        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
-    }
-
-    .insights-title {
-        margin: 0;
-        color: var(--text-primary);
-        font-size: 1.5em;
-        font-weight: 600;
-        letter-spacing: -0.025em;
-    }
-
-    .insights-list {
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
-    }
-
-    .insight-item {
-        display: flex;
-        align-items: flex-start;
-        gap: 16px;
-        padding: 4px 0;
-        opacity: 0;
-        animation: fadeInUp 0.6s ease forwards;
-        animation-delay: var(--delay);
-    }
-
-    @keyframes fadeInUp {
-        from {
-            opacity: 0;
-            transform: translateY(20px);
+    @media (max-width: 768px) {
+        .selector-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 12px;
         }
-        to {
-            opacity: 1;
-            transform: translateY(0);
+
+        .period-select {
+            width: 100%;
+            min-width: unset;
         }
-    }
 
-    .insight-bullet {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: linear-gradient(
-            135deg,
-            var(--primary-color),
-            var(--primary-light)
-        );
-        flex-shrink: 0;
-        margin-top: 8px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        transition: transform 0.2s ease;
-    }
+        .chart-meta {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 8px;
+        }
 
-    .insight-item:hover .insight-bullet {
-        transform: scale(1.2);
-    }
+        .data-info {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 8px;
+        }
 
-    .insight-content {
-        color: var(--text-primary);
-        font-size: 1.1rem;
-        line-height: 1.1;
-        font-weight: 400;
-        transition: color 0.2s ease;
-    }
+        .data-stats {
+            gap: 6px;
+        }
 
-    .insight-item:hover .insight-content {
-        color: var(--primary-color);
-    }
+        .stat-badge, .duration-badge {
+            padding: 3px 6px;
+            font-size: 0.75rem;
+        }
 
-    /* Modern Insights (override/extend) */
-    .insights-section.modern {
-        background: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 14px;
-        padding: 16px;
-        box-shadow: 0 2px 10px var(--shadow);
-    }
-
-    .insights-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 12px;
-        padding-bottom: 10px;
-        border-bottom: 1px solid var(--border-color);
-    }
-
-    .insights-title-wrap {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .insights-icon {
-        font-size: 1.2rem;
-    }
-
-    .insights-title {
-        margin: 0;
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: var(--text-primary);
-    }
-
-    .btn.outline {
-        background: transparent;
-        border: 1px solid var(--primary-color);
-        color: var(--primary-color);
-    }
-    .btn.outline:hover {
-        background: rgba(var(--primary-rgb), 0.08);
-        transform: translateY(-1px);
-    }
-
-    .insights-list {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
-
-    .insight-item.card {
-        display: grid;
-        grid-template-columns: 4px 1fr;
-        gap: 0;
-        background: var(--neutral-light);
-        border: 1px solid var(--border-color);
-        border-radius: 10px;
-        overflow: hidden;
-        opacity: 0;
-        animation: fadeInUp 0.5s ease forwards;
-        animation-delay: var(--delay);
-    }
-
-    .insight-accent {
-        background: linear-gradient(
-            180deg,
-            var(--primary-color),
-            var(--primary-light)
-        );
-    }
-
-    .insight-body {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 12px 14px;
-    }
-
-    .insight-content {
-        color: var(--text-primary);
-        font-size: 1rem;
-        line-height: 1.4;
-    }
-
-    .icon-button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 32px;
-        height: 32px;
-        border-radius: 8px;
-        border: 1px solid var(--border-color);
-        background: var(--bg-secondary);
-        color: var(--text-secondary);
-        cursor: pointer;
-        transition:
-            background 0.2s ease,
-            border-color 0.2s ease,
-            color 0.2s ease,
-            transform 0.1s ease;
-    }
-    .icon-button:hover {
-        border-color: var(--primary-color);
-        color: var(--primary-color);
-        transform: translateY(-1px);
-    }
-
-    .insights-footer {
-        margin-top: 12px;
-        display: flex;
-        justify-content: center;
-    }
-
-    /* Cohesive Insights (다른 카드·차트와 톤 통일) */
-    .insights-section.cohesive {
-        background: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 12px;
-        padding: 16px;
-        box-shadow: 0 2px 8px var(--shadow);
-        margin: 32px 0;
-    }
-
-    .insights-section.cohesive .insights-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 12px;
-        padding-bottom: 10px;
-        border-bottom: 1px solid var(--border-color);
-    }
-
-    .insights-section.cohesive .insights-title-wrap {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .insights-section.cohesive .insights-icon {
-        font-size: 1.2rem;
-    }
-
-    .insights-section.cohesive .insights-title {
-        margin: 0;
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: var(--text-primary);
-    }
-
-    .insights-section.cohesive .insights-count {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        height: 22px;
-        padding: 0 8px;
-        border-radius: 999px;
-        background: var(--neutral-light);
-        border: 1px solid var(--border-color);
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-    }
-
-    .insights-section.cohesive .insights-list {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
-
-    .insights-section.cohesive .insight-item.card {
-        display: grid;
-        grid-template-columns: 4px 1fr;
-        gap: 0;
-        background: var(--neutral-light);
-        border: 1px solid var(--border-color);
-        border-radius: 10px;
-        overflow: hidden;
-        opacity: 0;
-        animation: fadeInUp 0.5s ease forwards;
-        animation-delay: var(--delay);
-    }
-
-    .insight-accent {
-        background: linear-gradient(
-            180deg,
-            var(--primary-color),
-            var(--primary-light)
-        );
-    }
-
-    .insight-body {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 12px 14px;
-    }
-
-    .insight-content {
-        color: var(--text-primary);
-        font-size: 1rem;
-        line-height: 1.4;
+        .last-updated-info {
+            font-size: 0.8rem;
+        }
     }
 </style>

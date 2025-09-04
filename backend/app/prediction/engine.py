@@ -42,7 +42,7 @@ class PredictionEngine:
         self.max_contract_power = 100  # 최대 계약 전력 100kW
         self.max_workers = 4  # 병렬 처리 스레드 수
         self._stats_cache = {}  # 기본 통계량 캐시
-        
+
         # 충전기 타입별 최대 전력 제한
         self.charger_limits = {
             "완속충전기 (AC)": 7,  # 완속은 최대 7kW
@@ -53,45 +53,45 @@ class PredictionEngine:
     def predict_contract_power(
         self, data: pd.DataFrame, station_id: str, charger_type: str = None
     ) -> EnsemblePrediction:
-        """
-        다양한 통계 모델을 사용하여 권고 계약 전력 예측 (병렬 처리 최적화)
-        Args:
-            data: 충전소 히스토리 데이터 (순간최고전력 포함)
-            station_id: 충전소 ID
-        Returns:
-            EnsemblePrediction: 앙상블 예측 결과
-        """
         start_time = time.time()
-        
+
         if data.empty or "순간최고전력" not in data.columns:
             return self._fallback_prediction(station_id)
 
         # 데이터 전처리 및 기본 통계량 계산
         power_data = self._preprocess_data(data)
-        
+
         if len(power_data) < 10:
             return self._fallback_prediction(station_id)
-        
+
         # 기본 통계량 사전 계산 (캐싱)
         cache_key = hash(power_data.tobytes())
         if cache_key not in self._stats_cache:
             self._stats_cache[cache_key] = self._compute_base_statistics(power_data)
-        
+
         base_stats = self._stats_cache[cache_key]
 
         # 병렬로 모델 실행
         model_predictions = []
-        
+
         try:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 # 모델 태스크 정의
                 tasks = {
-                    executor.submit(self._extreme_value_models_optimized, power_data, base_stats): "EVT",
-                    executor.submit(self._statistical_inference_models_optimized, power_data, base_stats): "STAT",
+                    executor.submit(
+                        self._extreme_value_models_optimized, power_data, base_stats
+                    ): "EVT",
+                    executor.submit(
+                        self._statistical_inference_models_optimized,
+                        power_data,
+                        base_stats,
+                    ): "STAT",
                     executor.submit(self._time_series_models, data): "TS",
-                    executor.submit(self._machine_learning_models_optimized, power_data, base_stats): "ML"
+                    executor.submit(
+                        self._machine_learning_models_optimized, power_data, base_stats
+                    ): "ML",
                 }
-                
+
                 # 결과 수집
                 for future in as_completed(tasks, timeout=10):
                     try:
@@ -100,8 +100,10 @@ class PredictionEngine:
                             model_predictions.extend(models)
                     except Exception as e:
                         model_type = tasks[future]
-                        self.logger.warning(f"{model_type} models failed for {station_id}: {e}")
-                        
+                        self.logger.warning(
+                            f"{model_type} models failed for {station_id}: {e}"
+                        )
+
         except Exception as e:
             self.logger.error(f"Parallel prediction failed for {station_id}: {e}")
             return self._fallback_prediction(station_id)
@@ -109,15 +111,17 @@ class PredictionEngine:
         # 최소한의 모델 결과가 있는지 확인
         if not model_predictions:
             return self._fallback_prediction(station_id)
-        
+
         # 앙상블 예측 수행
         result = self._ensemble_prediction(
             model_predictions, power_data, station_id, charger_type
         )
-        
+
         elapsed_time = time.time() - start_time
-        self.logger.info(f"Prediction completed for {station_id} in {elapsed_time:.3f}s with {len(model_predictions)} models")
-        
+        self.logger.info(
+            f"Prediction completed for {station_id} in {elapsed_time:.3f}s with {len(model_predictions)} models"
+        )
+
         return result
 
     def _preprocess_data(self, data: pd.DataFrame) -> np.ndarray:
@@ -133,38 +137,45 @@ class PredictionEngine:
         lower_bound = max(0, q1 - 1.5 * iqr)
         upper_bound = q3 + 1.5 * iqr
 
-        power_data = power_data[(power_data >= lower_bound) & (power_data <= upper_bound)]
+        power_data = power_data[
+            (power_data >= lower_bound) & (power_data <= upper_bound)
+        ]
         return power_data.values
-    
-    
+
     def _compute_base_statistics(self, power_data: np.ndarray) -> Dict[str, float]:
-        """기본 통계량 계산"""
         return {
-            'mean': np.mean(power_data),
-            'median': np.median(power_data),
-            'std': np.std(power_data, ddof=1),
-            'mad': np.median(np.abs(power_data - np.median(power_data))),
-            'q25': np.percentile(power_data, 25),
-            'q75': np.percentile(power_data, 75),
-            'q90': np.percentile(power_data, 90),
-            'q95': np.percentile(power_data, 95),
-            'q99': np.percentile(power_data, 99),
-            'min': np.min(power_data),
-            'max': np.max(power_data)
+            "mean": np.mean(power_data),
+            "median": np.median(power_data),
+            "std": np.std(power_data, ddof=1),
+            "mad": np.median(np.abs(power_data - np.median(power_data))),
+            "q25": np.percentile(power_data, 25),
+            "q75": np.percentile(power_data, 75),
+            "q90": np.percentile(power_data, 90),
+            "q95": np.percentile(power_data, 95),
+            "q99": np.percentile(power_data, 99),
+            "min": np.min(power_data),
+            "max": np.max(power_data),
         }
 
-    def _extreme_value_models_optimized(self, power_data: np.ndarray, base_stats: Dict[str, float]) -> List[ModelPrediction]:
-        """극값 이론 모델들 (최적화된 버전)"""
+    def _extreme_value_models_optimized(
+        self, power_data: np.ndarray, base_stats: Dict[str, float]
+    ) -> List[ModelPrediction]:
         models = []
 
         try:
             # 빠른 초기 참값 설정으로 최적화 속도 향상
             # 1. Generalized Extreme Value (GEV) Distribution
-            gev_params = genextreme.fit(power_data, 
-                                       loc=base_stats['mean'], 
-                                       scale=base_stats['std'])
+            gev_params = genextreme.fit(
+                power_data, loc=base_stats["mean"], scale=base_stats["std"]
+            )
             gev_prediction = genextreme.ppf(0.95, *gev_params)  # 95% 분위수
-            gev_ci = (base_stats['q90'], base_stats['q99'])  # 빠른 근사치
+            
+            # 비정상적인 예측값 검증 및 제한
+            if not np.isfinite(gev_prediction) or gev_prediction < 0 or gev_prediction > 10000:
+                self.logger.warning(f"GEV 예측값이 비정상적입니다: {gev_prediction}, 기본값으로 대체")
+                gev_prediction = min(base_stats["q95"], 100)
+            
+            gev_ci = (base_stats["q90"], base_stats["q99"])  # 빠른 근사치
 
             models.append(
                 ModelPrediction(
@@ -181,12 +192,21 @@ class PredictionEngine:
                 )
             )
 
-            # 2. Gumbel Distribution (최적화된 버전)
-            gumbel_params = gumbel_r.fit(power_data, 
-                                        loc=base_stats['mean'],
-                                        scale=base_stats['std'])
+            # 2. Gumbel Distribution
+            gumbel_params = gumbel_r.fit(
+                power_data, loc=base_stats["mean"], scale=base_stats["std"]
+            )
             gumbel_prediction = gumbel_r.ppf(0.95, *gumbel_params)
-            gumbel_ci = (base_stats.get('q85', base_stats['q90'] * 0.95), base_stats.get('q98', base_stats['q95'] * 1.02))
+            
+            # 비정상적인 예측값 검증 및 제한
+            if not np.isfinite(gumbel_prediction) or gumbel_prediction < 0 or gumbel_prediction > 10000:
+                self.logger.warning(f"Gumbel 예측값이 비정상적입니다: {gumbel_prediction}, 기본값으로 대체")
+                gumbel_prediction = min(base_stats["q95"], 100)
+            
+            gumbel_ci = (
+                base_stats.get("q85", base_stats["q90"] * 0.95),
+                base_stats.get("q98", base_stats["q95"] * 1.02),
+            )
 
             models.append(
                 ModelPrediction(
@@ -221,31 +241,34 @@ class PredictionEngine:
     def _statistical_inference_models_optimized(
         self, power_data: np.ndarray, base_stats: Dict[str, float]
     ) -> List[ModelPrediction]:
-        """통계적 추론 모델들 (최적화된 버전)"""
         models = []
 
         try:
             # 1. Bayesian Estimation (사전 계산된 통계량 사용)
-            bayesian_result = self._bayesian_estimation_optimized(power_data, base_stats)
+            bayesian_result = self._bayesian_estimation_optimized(
+                power_data, base_stats
+            )
             if bayesian_result:
                 models.append(bayesian_result)
 
             # 2. Bootstrap Confidence Interval (축소된 반복 횟수)
-            bootstrap_result = self._bootstrap_method_optimized(power_data, base_stats, n_bootstrap=200)
+            bootstrap_result = self._bootstrap_method_optimized(
+                power_data, base_stats, n_bootstrap=200
+            )
             if bootstrap_result:
                 models.append(bootstrap_result)
 
             # 3. 빠른 분위수 추정 (사전 계산된 값 사용)
             fast_percentile_result = ModelPrediction(
                 model_name="Fast_Percentile_95",
-                predicted_value=base_stats['q95'],
-                confidence_interval=(base_stats['q90'], base_stats['q99']),
+                predicted_value=base_stats["q95"],
+                confidence_interval=(base_stats["q90"], base_stats["q99"]),
                 confidence_score=0.75,
                 method_details={
                     "method": "Direct Percentile",
                     "percentile": 95,
-                    "description": "사전 계산된 95% 분위수 사용"
-                }
+                    "description": "사전 계산된 95% 분위수 사용",
+                },
             )
             models.append(fast_percentile_result)
 
@@ -287,17 +310,18 @@ class PredictionEngine:
 
         return models
 
-    def _machine_learning_models_optimized(self, power_data: np.ndarray, base_stats: Dict[str, float]) -> List[ModelPrediction]:
-        """머신러닝 모델들 (최적화된 버전)"""
+    def _machine_learning_models_optimized(
+        self, power_data: np.ndarray, base_stats: Dict[str, float]
+    ) -> List[ModelPrediction]:
         models = []
 
         try:
             # 1. Ensemble Percentile Method (사전 계산된 값 사용)
             percentile_predictions = [
-                base_stats['q90'], 
-                base_stats['q95'], 
-                base_stats.get('q98', base_stats['q95'] * 1.02),  # 근사치
-                base_stats['q99']
+                base_stats["q90"],
+                base_stats["q95"],
+                base_stats.get("q98", base_stats["q95"] * 1.02),  # 근사치
+                base_stats["q99"],
             ]
 
             # 가중 평균 (높은 분위수에 더 많은 가중치)
@@ -309,8 +333,8 @@ class PredictionEngine:
                     model_name="Weighted_Percentile_Ensemble",
                     predicted_value=weighted_prediction,
                     confidence_interval=(
-                        base_stats.get('q85', base_stats['q90'] * 0.95),
-                        base_stats['q99']
+                        base_stats.get("q85", base_stats["q90"] * 0.95),
+                        base_stats["q99"],
                     ),
                     confidence_score=0.75,
                     method_details={
@@ -354,7 +378,17 @@ class PredictionEngine:
             # GEV 분포에 피팅
             params = genextreme.fit(block_maxima)
             prediction = genextreme.ppf(0.95, *params)
+            
+            # 비정상적인 예측값 검증 및 제한
+            if not np.isfinite(prediction) or prediction < 0 or prediction > 10000:
+                self.logger.warning(f"Block Maxima GEV 예측값이 비정상적입니다: {prediction}, 기본값으로 대체")
+                prediction = min(np.percentile(block_maxima, 95), 100)
+            
             ci = genextreme.interval(0.9, *params)
+            
+            # CI 값들도 검증
+            if not (np.isfinite(ci[0]) and np.isfinite(ci[1])):
+                ci = (prediction * 0.9, prediction * 1.1)
 
             return ModelPrediction(
                 model_name="Block_Maxima_GEV",
@@ -392,10 +426,20 @@ class PredictionEngine:
 
             # 예측값 계산 (95% 분위수)
             prediction = threshold + genpareto.ppf(0.95, *params)
+            
+            # 비정상적인 예측값 검증 및 제한
+            if not np.isfinite(prediction) or prediction < 0 or prediction > 10000:
+                self.logger.warning(f"POT 예측값이 비정상적입니다: {prediction}, 기본값으로 대체")
+                prediction = min(np.percentile(power_data, 95), 100)
 
             # 신뢰구간 계산
             lower = threshold + genpareto.ppf(0.05, *params)
             upper = threshold + genpareto.ppf(0.99, *params)
+            
+            # CI 값들도 검증
+            if not (np.isfinite(lower) and np.isfinite(upper)):
+                lower = prediction * 0.9
+                upper = prediction * 1.1
 
             return ModelPrediction(
                 model_name="Peak_Over_Threshold",
@@ -415,12 +459,14 @@ class PredictionEngine:
             self.logger.warning(f"POT method failed: {e}")
             return None
 
-    def _bayesian_estimation_optimized(self, power_data: np.ndarray, base_stats: Dict[str, float]) -> Optional[ModelPrediction]:
+    def _bayesian_estimation_optimized(
+        self, power_data: np.ndarray, base_stats: Dict[str, float]
+    ) -> Optional[ModelPrediction]:
         try:
             # 단순 베이지안 추정 (사전 계산된 통계량 사용)
             n = len(power_data)
-            sample_mean = base_stats['mean']
-            sample_std = base_stats['std']
+            sample_mean = base_stats["mean"]
+            sample_std = base_stats["std"]
 
             # 사전 분포: 약한 정보적 사전분포
             prior_mean = sample_mean
@@ -462,12 +508,17 @@ class PredictionEngine:
             return None
 
     def _bootstrap_method_optimized(
-        self, power_data: np.ndarray, base_stats: Dict[str, float], n_bootstrap: int = 200
+        self,
+        power_data: np.ndarray,
+        base_stats: Dict[str, float],
+        n_bootstrap: int = 200,
     ) -> Optional[ModelPrediction]:
         try:
             # 병렬로 부트스트랩 실행 (속도 개선)
             np.random.seed(42)  # 재현성을 위한 시드 설정
-            bootstrap_predictions = np.random.choice(power_data, size=(n_bootstrap, len(power_data)), replace=True)
+            bootstrap_predictions = np.random.choice(
+                power_data, size=(n_bootstrap, len(power_data)), replace=True
+            )
             # 백터화된 연산으로 95% 분위수 계산
             bootstrap_percentiles = np.percentile(bootstrap_predictions, 95, axis=1)
 
@@ -724,8 +775,8 @@ class PredictionEngine:
     ) -> Optional[ModelPrediction]:
         try:
             # 중앙값과 MAD (Median Absolute Deviation) 사용 (사전 계산된 값)
-            median = base_stats['median']
-            mad = base_stats['mad']
+            median = base_stats["median"]
+            mad = base_stats["mad"]
 
             # 강건한 표준편차 추정
             robust_std = mad * 1.4826  # 정규분포에서 MAD를 표준편차로 변환
@@ -836,13 +887,13 @@ class PredictionEngine:
         if cache_key in self._stats_cache:
             base_stats = self._stats_cache[cache_key]
             stats = {
-                "min": float(base_stats['min']),
-                "max": float(base_stats['max']),
-                "mean": float(base_stats['mean']),
-                "median": float(base_stats['median']),
-                "std": float(base_stats['std']),
-                "percentile_95": float(base_stats['q95']),
-                "percentile_99": float(base_stats['q99']),
+                "min": float(base_stats["min"]),
+                "max": float(base_stats["max"]),
+                "mean": float(base_stats["mean"]),
+                "median": float(base_stats["median"]),
+                "std": float(base_stats["std"]),
+                "percentile_95": float(base_stats["q95"]),
+                "percentile_99": float(base_stats["q99"]),
             }
         else:
             stats = {

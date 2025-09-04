@@ -13,21 +13,23 @@ class StationService:
         self.logger = logging.getLogger(__name__)
         self._cached_data = {}
         self._cache_timestamp = {}
-        self._cache_ttl = 300  # 5분 캐시
+        self._cache_ttl = 1800  # 30분 캐시 (성능 개선)
+        self._long_cache_ttl = 3600  # 1시간 캐시 (정적 데이터용)
 
-    def _is_cache_valid(self, key: str) -> bool:
+    def _is_cache_valid(self, key: str, use_long_cache: bool = False) -> bool:
         if key not in self._cache_timestamp:
             return False
+        ttl = self._long_cache_ttl if use_long_cache else self._cache_ttl
         return (
             datetime.now() - self._cache_timestamp[key]
-        ).total_seconds() < self._cache_ttl
+        ).total_seconds() < ttl
 
     def _set_cache(self, key: str, data: Any) -> None:
         self._cached_data[key] = data
         self._cache_timestamp[key] = datetime.now()
 
-    def _get_cache(self, key: str) -> Optional[Any]:
-        if self._is_cache_valid(key):
+    def _get_cache(self, key: str, use_long_cache: bool = False) -> Optional[Any]:
+        if self._is_cache_valid(key, use_long_cache):
             return self._cached_data.get(key)
         return None
 
@@ -59,7 +61,8 @@ class StationService:
         self, search: str = None, sort_by: str = "id", sort_order: str = "asc"
     ) -> Dict[str, Any]:
         cache_key = f"stations_{search}_{sort_by}_{sort_order}"
-        cached_result = self._get_cache(cache_key)
+        # 정적 데이터는 긴 캐시 사용
+        cached_result = self._get_cache(cache_key, use_long_cache=True)
         if cached_result:
             return cached_result
 
@@ -75,8 +78,8 @@ class StationService:
                     "total": 0,
                 }
 
-            # 전체 데이터 로드
-            df = loader.load_historical_sessions(days=9999)
+            # 최적화: 최근 데이터 우선 로드 (성능 개선)
+            df = loader.load_historical_sessions(days=365)  # 1년 데이터로 제한
             if df.empty:
                 return {
                     "success": False,
@@ -1140,15 +1143,19 @@ class StationService:
                     "station_id": station_id,
                 }
 
-            # 에너지 컬럼 찾기
+            # 에너지 컬럼 찾기 (실제 CSV 컬럼명에 맞춰 수정)
             energy_cols = [
                 col
                 for col in df.columns
                 if any(
                     keyword in col.lower()
-                    for keyword in ["에너지", "energy", "kwh", "충전량"]
+                    for keyword in ["에너지", "energy", "kwh", "충전량", "kWh"]
                 )
             ]
+            
+            # 디버깅: 컬럼명 출력
+            self.logger.info(f"Station {station_id} - Available columns: {list(df.columns)}")
+            self.logger.info(f"Station {station_id} - Found energy columns: {energy_cols}")
 
             if not energy_cols:
                 return {

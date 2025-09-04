@@ -11,6 +11,7 @@
 - [모니터링](#모니터링)
 - [데이터베이스 관리](#데이터베이스-관리)
 - [백업 및 복구](#백업-및-복구)
+- [API 문서](#api-문서)
 
 ---
 
@@ -1153,4 +1154,31 @@ python scripts/retrain_models.py STATION_ID --validation-split 0.2
 
 ---
 
-*📅 문서 최종 업데이트: 2025년 9월 1일*  
+## 📡 API 문서
+
+### 상세 API 문서
+API 요청 흐름, 데이터 처리 과정, 백엔드 로직에 대한 자세한 내용은 별도 문서를 참조하세요:
+
+📖 **[API_DOCUMENTATION.md](./API_DOCUMENTATION.md)**
+
+### 주요 API 엔드포인트
+- `GET /api/stations` - 충전소 목록 조회
+- `GET /api/stations/{station_id}/energy-demand-forecast` - 전력량 수요 예측
+- `GET /api/stations/{station_id}/predictions` - 최고전력 예측  
+- `GET /api/stations/{station_id}/monthly-contract` - 월별 계약전력
+
+### API 문제 해결
+```bash
+# API 서버 상태 확인
+curl http://localhost:8000/api/stations
+
+# 특정 충전소 데이터 확인
+curl "http://localhost:8000/api/stations/BNS1058/energy-demand-forecast?days=90"
+
+# 로그 확인
+tail -f backend/logs/api.log
+```
+
+---
+
+*📅 문서 최종 업데이트: 2025년 9월 4일*  

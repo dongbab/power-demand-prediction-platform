@@ -403,8 +403,8 @@ async def get_data_range(station_id: str):
     try:
         loader = ChargingDataLoader(station_id)
 
-        # 전체 데이터 로드 (날짜 범위 확인을 위해)
-        df = loader.load_historical_sessions(days=9999)
+        # 최적화: 최근 데이터 우선 로드 (성능 개선)
+        df = loader.load_historical_sessions(days=365)  # 1년 데이터로 제한
 
         if df.empty:
             return {"success": False, "message": "데이터가 없습니다.", "data_range": None}

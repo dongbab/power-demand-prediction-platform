@@ -1,6 +1,7 @@
 import { writable, derived } from "svelte/store";
 import type { Readable } from "svelte/store";
 import { api, apiService } from "../services/api";
+import { searchActions } from "./searchStore";
 import type {
     ChargingStation,
     PaginationState,
@@ -83,15 +84,17 @@ export const stationActions: StationActions = {
         error.set(null);
 
         try {
-            // Use apiService.getStations to properly handle parameters including sorting
+            // 클라이언트 사이드 검색을 위해 서버에서는 검색 파라미터 제외하고 전체 데이터만 요청
             const response = await apiService.getStations({
                 limit: 9999,
-                search: search,
-                sortBy: sortBy,
-                sortOrder: sortOrder
+                // search, sortBy, sortOrder 제거 - 클라이언트에서 처리
             });
 
-            stations.set(response.stations || []);
+            const allStationsData = response.stations || [];
+            stations.set(allStationsData);
+
+            // 검색 스토어 초기화 (인덱스 구축)
+            searchActions.initializeSearch(allStationsData);
 
             pagination.set({
                 page: 1,
@@ -99,7 +102,7 @@ export const stationActions: StationActions = {
                 totalPages: 1,
                 hasNext: false,
                 hasPrev: false,
-                total: (response.stations || []).length,
+                total: allStationsData.length,
             });
         } catch (err: unknown) {
             const errorMessage =

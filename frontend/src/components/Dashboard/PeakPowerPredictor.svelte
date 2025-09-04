@@ -1,13 +1,10 @@
 <script>
     import { onMount, onDestroy } from "svelte";
-    import { Chart, registerables } from "chart.js";
-    import zoomPlugin from "chartjs-plugin-zoom";
-    import "chartjs-adapter-date-fns";
     import MetricCard from "./MetricCard.svelte";
     import LoadingSpinner from "../LoadingSpinner.svelte";
 
-    // Chart.js 등록 (zoom 플러그인 포함)
-    Chart.register(...registerables, zoomPlugin);
+    // Chart.js는 클라이언트에서만 동적 로드
+    let Chart;
 
     export let stationId;
     export let prediction = null;
@@ -42,8 +39,27 @@
     let modelComparisons = [];
     let showModelComparison = false;
 
-    onMount(() => {
-        loadAll();
+    onMount(async () => {
+        // 브라우저 환경에서만 실행
+        if (typeof window === 'undefined') return;
+        
+        try {
+            // Chart.js와 플러그인들 동적 로드
+            const [{ default: ChartJS }, dateAdapter, zoomPlugin] = 
+                await Promise.all([
+                    import("chart.js/auto"),
+                    import("chartjs-adapter-date-fns"),
+                    import("chartjs-plugin-zoom"),
+                ]);
+            
+            Chart = ChartJS;
+            Chart.register(zoomPlugin.default);
+            
+            // 데이터 로드
+            loadAll();
+        } catch (error) {
+            console.error('Chart.js 로드 실패:', error);
+        }
     });
 
     onDestroy(() => {
@@ -77,8 +93,26 @@
                 // 고급 예측 모델 결과 처리
                 if (result.advanced_model_prediction) {
                     const advModel = result.advanced_model_prediction;
-                    const rawPrediction = advModel.raw_prediction || 0; // 알고리즘 원본 예측값
+                    let rawPrediction = advModel.raw_prediction || 0; // 알고리즘 원본 예측값
+                    
+                    // 비정상적으로 큰 값이면 단위 변환 (와트 → 킬로와트)
+                    if (rawPrediction > 100000) {
+                        console.warn('비정상적으로 큰 예측값 감지:', rawPrediction, '-> kW로 변환');
+                        rawPrediction = rawPrediction / 1000;
+                    }
+                    
+                    // 여전히 비정상적으로 크면 제한
+                    if (rawPrediction > 10000) {
+                        console.warn('여전히 비정상적으로 큰 값:', rawPrediction, '-> 10000kW로 제한');
+                        rawPrediction = 10000;
+                    }
                     const finalPrediction = advModel.final_prediction || 0; // 제한 적용된 권고값
+                    
+                    console.log('PeakPowerPredictor - API 원본 데이터:', {
+                        rawPrediction,
+                        finalPrediction,
+                        advModel
+                    });
 
                     // 제한 초과 여부 계산
                     const predictionExceedsLimit =
@@ -93,9 +127,15 @@
                             0,
                             Math.min(1, result.confidence || 0)
                         ),
-                        algorithmPrediction: Math.round(rawPrediction), // 알고리즘 예측값
+                        algorithmPrediction: Math.round(rawPrediction), // 알고리즘 예측값 (이미 검증됨)
                         predictionExceedsLimit: predictionExceedsLimit,
                     };
+                    
+                    console.log('PeakPowerPredictor - 계산된 메트릭:', {
+                        originalRawPrediction: rawPrediction,
+                        roundedAlgorithmPrediction: Math.round(rawPrediction),
+                        finalMetrics: metrics
+                    });
 
                     // 고급 모델 예측 결과 저장
                     advancedPrediction = {
@@ -115,9 +155,11 @@
                         monthlyContract?.recommended_contract_kw ||
                         result.recommended_contract_kw ||
                         0;
-                    const algorithmPrediction =
+                    const algorithmPrediction = Math.min(
                         result.algorithm_prediction_kw ||
-                        contractRecommendation;
+                        contractRecommendation,
+                        10000
+                    ); // 최대 10000kW 제한
 
                     metrics = {
                         lastMonthPeak: Math.round(
@@ -130,7 +172,7 @@
                             0,
                             Math.min(1, result.confidence || 0)
                         ),
-                        algorithmPrediction: Math.round(algorithmPrediction),
+                        algorithmPrediction: Math.round(Math.min(algorithmPrediction, 10000)),
                         predictionExceedsLimit:
                             result.prediction_exceeds_limit || false,
                     };
@@ -181,6 +223,9 @@
     }
 
     function createChart() {
+        // 브라우저 환경 체크
+        if (typeof window === 'undefined' || !Chart) return;
+        
         if (!chartCanvas) {
             return;
         }
@@ -312,16 +357,18 @@
                             title: {
                                 display: true,
                                 text: "월별",
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#e5e7eb' : '#374151',
                                 font: {
                                     size: 14,
                                     weight: "bold",
                                 },
                             },
                             grid: {
-                                color: "rgba(0, 0, 0, 0.1)",
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.1)',
                                 drawBorder: false,
                             },
                             ticks: {
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#d1d5db' : '#4b5563',
                                 font: {
                                     size: 11,
                                 },
@@ -332,16 +379,18 @@
                             title: {
                                 display: true,
                                 text: "전력 (kW)",
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#e5e7eb' : '#374151',
                                 font: {
                                     size: 14,
                                     weight: "bold",
                                 },
                             },
                             grid: {
-                                color: "rgba(0, 0, 0, 0.1)",
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
                                 drawBorder: false,
                             },
                             ticks: {
+                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#d1d5db' : '#4b5563',
                                 font: {
                                     size: 11,
                                 },
@@ -367,17 +416,6 @@
 </script>
 
 <div class="peak-predictor">
-    <div class="section-header">
-        <h2>순간 최고 전력 예측</h2>
-        <div class="last-updated">
-            {#if isLoading}
-                <LoadingSpinner size="small" />
-                <span>업데이트 중...</span>
-            {:else if lastUpdated}
-                <span>마지막 업데이트: {lastUpdated.toLocaleTimeString()}</span>
-            {/if}
-        </div>
-    </div>
 
     <!-- 상단 지표 카드 -->
     <div class="metrics-row">
@@ -389,10 +427,11 @@
             tooltip="지난 달 충전소에서 기록된 최대 순간 전력 사용량"
         />
         <MetricCard
-            title="다음달 권고계약 전력"
+            title="다음 달 권고계약 전력"
             value={metrics.nextMonthRecommended}
             unit="kW"
-            type="contract"
+            type={metrics.nextMonthRecommended >= 80 ? "contract-high" : metrics.nextMonthRecommended >= 50 ? "contract-medium" : "contract-low"}
+            highlighted={true}
             tooltip="예측된 최고전력 + 안전마진으로 계산한 권고값
 
 • 안전마진: 8-20% (데이터 품질에 따라 조정)
@@ -427,51 +466,68 @@
         />
     </div>
 
-    <!-- 데이터 범위/상태 -->
-    <div class="data-range" aria-live="polite">
-        {#if dataInfo.startDate && dataInfo.endDate}
-            <div class="data-info-grid">
-                <div class="data-info-card">
-                    <span class="pill neutral">실제 데이터</span>
-                    <div class="date-range">
-                        <div class="date-item">
-                            <span class="date-label">시작:</span>
-                            <span class="date-value">{fmtDate(dataInfo.startDate)}</span>
-                        </div>
-                        <div class="date-separator">~</div>
-                        <div class="date-item">
-                            <span class="date-label">종료:</span>
-                            <span class="date-value">{fmtDate(dataInfo.endDate)}</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="data-stats-card">
-                    <span class="pill stats">데이터 통계</span>
-                    <div class="stats-info">
-                        <span>총 {(dataInfo.recordCount || 0).toLocaleString()}개 레코드</span>
-                        <span class="sep">·</span>
-                        <span>기간 {Math.ceil((new Date(dataInfo.endDate) - new Date(dataInfo.startDate)) / (1000 * 60 * 60 * 24))}일</span>
-                    </div>
-                </div>
-            </div>
-        {:else}
-            <span class="pill warn">데이터 없음</span>
-            <span>해당 충전소({stationId}) CSV 데이터 미발견</span>
-        {/if}
-    </div>
-
     <!-- Chart.js 차트 -->
     <div class="chart-card">
         <div class="chart-header">
             <h3>월별 최대 순간최고전력 추이</h3>
-            <div class="chart-controls">
-                <button
-                    class="zoom-reset-btn"
-                    on:click={resetZoom}
-                    title="줌 초기화"
-                >
-                    원래대로
-                </button>
+            <div class="chart-meta">
+                {#if dataInfo.startDate && dataInfo.endDate}
+                    <div class="data-info">
+                        <div class="data-period">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M8 2v4"></path>
+                                <path d="M16 2v4"></path>
+                                <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+                                <path d="M3 10h18"></path>
+                            </svg>
+                            <span>{fmtDate(dataInfo.startDate)} ~ {fmtDate(dataInfo.endDate)}</span>
+                        </div>
+                        <div class="data-stats">
+                            <span class="stat-badge">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M12 20V10"></path>
+                                    <path d="M18 20V4"></path>
+                                    <path d="M6 20v-6"></path>
+                                </svg>
+                                {(dataInfo.recordCount || 0).toLocaleString()}개
+                            </span>
+                            <span class="duration-badge">
+                                {Math.ceil((new Date(dataInfo.endDate) - new Date(dataInfo.startDate)) / (1000 * 60 * 60 * 24))}일
+                            </span>
+                        </div>
+                    </div>
+                {:else}
+                    <div class="no-data-info">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                            <line x1="12" y1="9" x2="12" y2="13"></line>
+                            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                        </svg>
+                        <span>충전소 {stationId} 데이터 불러올 수 없음</span>
+                    </div>
+                {/if}
+                {#if lastUpdated}
+                    <div class="last-updated-info">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12,6 12,12 16,14"></polyline>
+                        </svg>
+                        <span>마지막 업데이트 : {lastUpdated.toLocaleTimeString()}</span>
+                    </div>
+                {/if}
+                <div class="chart-controls">
+                    <button
+                        class="zoom-reset-btn"
+                        on:click={resetZoom}
+                        title="줌 초기화"
+                    >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M3 3v18h18" />
+                            <path d="M18.5 9.5L12 16l-4-4-3.5 3.5" />
+                        </svg>
+                        원래대로
+                    </button>
+                </div>
             </div>
         </div>
         <div class="chart-container">
@@ -504,126 +560,14 @@
         background: transparent;
     }
 
-    .section-header {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 16px;
-        margin-bottom: 20px;
-        padding-bottom: 16px;
-        border-bottom: 1px solid var(--border-color);
-    }
-
-    .section-header h2 {
-        display: none;
-    }
-
-    .last-updated {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        color: var(--text-secondary);
-        font-size: 0.9rem;
-    }
-
     .metrics-row {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
         gap: 12px;
     }
 
-    .data-range {
-        margin: 16px 0;
-    }
 
-    .data-info-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 16px;
-    }
 
-    .data-info-card, .data-stats-card {
-        background: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 12px;
-        padding: 16px;
-        box-shadow: 0 2px 4px var(--shadow);
-    }
-
-    .date-range {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        margin-top: 12px;
-        font-size: 0.9rem;
-    }
-
-    .date-item {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-
-    .date-label {
-        color: var(--text-secondary);
-        font-size: 0.8rem;
-        font-weight: 500;
-    }
-
-    .date-value {
-        color: var(--text-primary);
-        font-weight: 600;
-        font-family: 'Courier New', monospace;
-    }
-
-    .date-separator {
-        color: var(--text-secondary);
-        font-weight: bold;
-        padding: 0 4px;
-    }
-
-    .stats-info {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-top: 12px;
-        font-size: 0.9rem;
-        color: var(--text-secondary);
-    }
-
-    .data-range .pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        border-radius: 999px;
-        padding: 4px 8px;
-        font-size: 0.78rem;
-        border: 1px solid var(--border-color);
-        background: var(--bg-secondary);
-        color: var(--text-primary);
-    }
-
-    .pill.neutral {
-        background: #eef2ff;
-        color: #4f46e5;
-        border-color: #c7d2fe;
-    }
-
-    .pill.stats {
-        background: #f0fdf4;
-        color: #16a34a;
-        border-color: #bbf7d0;
-    }
-
-    .pill.warn {
-        background: #fff7ed;
-        color: #c2410c;
-        border-color: #fed7aa;
-    }
-
-    .data-range .sep {
-        opacity: 0.6;
-    }
 
     .chart-card {
         background: var(--bg-secondary);
@@ -636,10 +580,10 @@
 
     .chart-header {
         display: flex;
-        justify-content: space-between;
-        align-items: center;
+        flex-direction: column;
+        gap: 12px;
         margin-bottom: 16px;
-        padding-bottom: 12px;
+        padding-bottom: 16px;
         border-bottom: 1px solid var(--border-color);
     }
 
@@ -650,10 +594,79 @@
         color: var(--text-primary);
     }
 
+    .chart-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+
+    .data-info {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+
+    .data-period {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--text-primary);
+        font-size: 0.9rem;
+    }
+
+    .data-stats {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .stat-badge, .duration-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        font-weight: 500;
+    }
+
+    .stat-badge {
+        background: rgba(16, 185, 129, 0.1);
+        color: #059669;
+        border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
+    .duration-badge {
+        background: rgba(99, 102, 241, 0.1);
+        color: #4f46e5;
+        border: 1px solid rgba(99, 102, 241, 0.2);
+    }
+
+    .no-data-info {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #f59e0b;
+        font-size: 0.9rem;
+        font-weight: 500;
+    }
+
+    .last-updated-info {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+    }
+
     .chart-controls {
         display: flex;
         gap: 8px;
     }
+
 
     .zoom-reset-btn {
         display: flex;
@@ -734,273 +747,60 @@
         }
     }
 
-    @media (max-width: 768px) {
-        .data-info-grid {
-            grid-template-columns: 1fr;
-            gap: 12px;
-        }
+    /* 다크모드 지원 */
+    :global([data-theme="dark"]) .data-info-card {
+        --bg-secondary: #1f2937;
+        --border-color: #374151;
+        --shadow: rgba(0, 0, 0, 0.3);
+        --shadow-hover: rgba(0, 0, 0, 0.5);
+        --text-primary: #f9fafb;
+        --text-secondary: #d1d5db;
+        --primary-color: #6366f1;
+    }
 
-        .date-range {
+    /* 라이트모드 지원 */
+    :global([data-theme="light"]) .data-info-card {
+        --bg-secondary: #ffffff;
+        --border-color: rgba(0, 0, 0, 0.1);
+        --shadow: rgba(0, 0, 0, 0.05);
+        --shadow-hover: rgba(0, 0, 0, 0.15);
+        --text-primary: #111827;
+        --text-secondary: #6b7280;
+        --primary-color: #4f46e5;
+    }
+
+    /* 애니메이션 최적화 */
+    @media (prefers-reduced-motion: reduce) {
+        .data-info-card {
+            transition: none !important;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .chart-meta {
             flex-direction: column;
             align-items: flex-start;
             gap: 8px;
         }
 
-        .date-item {
-            flex-direction: row;
-            gap: 8px;
-            align-items: center;
-        }
-
-        .stats-info {
+        .data-info {
             flex-direction: column;
             align-items: flex-start;
-            gap: 4px;
-        }
-    }
-
-    /* 고급 모델 비교 스타일 */
-    .advanced-models-section {
-        margin-top: 24px;
-        background: var(--bg-secondary);
-        border: 1px solid var(--border-color);
-        border-radius: 16px;
-        padding: 20px;
-        box-shadow: 0 2px 8px var(--shadow);
-    }
-
-    .advanced-models-section h3 {
-        margin: 0 0 16px 0;
-        font-size: 1.1rem;
-        color: var(--text-primary);
-    }
-
-    .toggle-button {
-        background: var(--primary-color);
-        color: white;
-        border: none;
-        padding: 8px 16px;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 0.9rem;
-        transition: background-color 0.2s;
-    }
-
-    .toggle-button:hover {
-        background: var(--primary-hover);
-    }
-
-    .ensemble-summary {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 12px;
-        margin: 16px 0;
-    }
-
-    .summary-card {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        background: var(--bg-primary);
-        padding: 12px;
-        border-radius: 8px;
-        border: 1px solid var(--border-color);
-    }
-
-    .summary-card .label {
-        font-size: 0.85rem;
-        color: var(--text-secondary);
-        margin-bottom: 4px;
-    }
-
-    .summary-card .value {
-        font-size: 1.1rem;
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-
-    .models-comparison {
-        margin-top: 20px;
-    }
-
-    .models-comparison h4 {
-        margin: 0 0 12px 0;
-        font-size: 1rem;
-        color: var(--text-primary);
-    }
-
-    .models-table {
-        display: grid;
-        gap: 8px;
-        background: var(--bg-primary);
-        border-radius: 8px;
-        padding: 16px;
-        border: 1px solid var(--border-color);
-    }
-
-    .table-header,
-    .table-row {
-        display: grid;
-        grid-template-columns: 2fr 1fr 1.5fr 1fr 3fr;
-        gap: 12px;
-        align-items: center;
-        padding: 8px 0;
-    }
-
-    .table-header {
-        font-weight: 600;
-        color: var(--text-secondary);
-        border-bottom: 1px solid var(--border-color);
-        font-size: 0.9rem;
-    }
-
-    .table-row {
-        border-bottom: 1px solid rgba(0, 0, 0, 0.05);
-        font-size: 0.9rem;
-    }
-
-    .table-row:last-child {
-        border-bottom: none;
-    }
-
-    .model-name {
-        font-weight: 500;
-        color: var(--text-primary);
-    }
-
-    .prediction-value {
-        font-weight: 600;
-        color: var(--primary-color);
-    }
-
-    .confidence {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .confidence-bar {
-        width: 40px;
-        height: 8px;
-        background: rgba(0, 0, 0, 0.1);
-        border-radius: 4px;
-        overflow: hidden;
-    }
-
-    .confidence-fill {
-        height: 100%;
-        background: linear-gradient(90deg, #ef4444, #f59e0b, #10b981);
-        border-radius: 4px;
-        transition: width 0.3s ease;
-    }
-
-    .weight {
-        font-weight: 500;
-        color: var(--text-secondary);
-    }
-
-    .description {
-        color: var(--text-secondary);
-        font-size: 0.85rem;
-        line-height: 1.2;
-    }
-
-    .data-histogram {
-        margin-top: 20px;
-        padding: 16px;
-        background: var(--bg-primary);
-        border-radius: 8px;
-        border: 1px solid var(--border-color);
-    }
-
-    .data-histogram h4 {
-        margin: 0 0 12px 0;
-        font-size: 1rem;
-        color: var(--text-primary);
-    }
-
-    .histogram-info {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-        gap: 12px;
-    }
-
-    .stat-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 8px 12px;
-        background: var(--bg-secondary);
-        border-radius: 6px;
-        font-size: 0.9rem;
-    }
-
-    .stat-item span:first-child {
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-
-    .stat-item span:last-child {
-        color: var(--text-primary);
-        font-weight: 600;
-    }
-
-    @media (min-width: 1024px) {
-        .metrics-row {
-            gap: 16px;
-        }
-
-        .chart-card {
-            padding: 30px;
-        }
-
-        .chart-container {
-            height: 500px;
-        }
-
-        .advanced-models-section {
-            padding: 24px;
-        }
-
-        .models-table {
-            padding: 20px;
-        }
-
-        .table-header,
-        .table-row {
-            grid-template-columns: 2.5fr 1fr 1.5fr 1fr 4fr;
-            gap: 16px;
-        }
-    }
-
-    @media (max-width: 768px) {
-        .table-header,
-        .table-row {
-            grid-template-columns: 1fr;
-            gap: 4px;
-            text-align: left;
-        }
-
-        .table-header span,
-        .table-row span {
-            padding: 4px 8px;
-        }
-
-        .table-header span:before,
-        .table-row span:before {
-            content: attr(data-label) ": ";
-            font-weight: 600;
-            display: inline;
-        }
-
-        .ensemble-summary {
-            grid-template-columns: 1fr;
             gap: 8px;
         }
 
-        .histogram-info {
-            grid-template-columns: 1fr;
-            gap: 8px;
+        .data-stats {
+            gap: 6px;
+        }
+
+        .stat-badge, .duration-badge {
+            padding: 3px 6px;
+            font-size: 0.75rem;
+        }
+
+        .last-updated-info {
+            font-size: 0.8rem;
         }
     }
+
 </style>

@@ -29,14 +29,32 @@
         // Initialize theme
         theme.init();
         
+        // Chart.js 모듈 미리 로드 (병렬 처리)
+        if (typeof window !== 'undefined') {
+            import('../../../lib/chart-utils.js').then(({ preloadChartModules }) => {
+                preloadChartModules();
+            }).catch(error => {
+                console.log('Chart utils preload failed:', error);
+            });
+        }
+        
         if (!stationId) {
             goto("/");
             return;
         }
 
-        // Load station data if not already loaded
+        // Load station data if not already loaded (최적화: 병렬 처리)
+        let stationLoadPromise = null;
         if (!station) {
-            await stationActions.loadStations();
+            stationLoadPromise = stationActions.loadStations();
+        }
+
+        // 차트 데이터 로딩을 미리 시작 (충전소 정보와 병렬 처리)
+        const dataLoadPromise = loadData();
+
+        // 충전소 정보가 필요한 경우 대기
+        if (stationLoadPromise) {
+            await stationLoadPromise;
             station = $stationById.get(stationId);
         }
 
@@ -50,14 +68,20 @@
         }
 
         stationActions.setCurrentStation(station);
-        await loadData();
+        
+        // 데이터 로딩 완료 대기
+        await dataLoadPromise;
 
-        // Keyboard shortcuts
-        document.addEventListener("keydown", handleKeydown);
+        // Keyboard shortcuts (브라우저에서만 실행)
+        if (typeof document !== 'undefined') {
+            document.addEventListener("keydown", handleKeydown);
+        }
     });
 
     onDestroy(() => {
-        document.removeEventListener("keydown", handleKeydown);
+        if (typeof document !== 'undefined') {
+            document.removeEventListener("keydown", handleKeydown);
+        }
     });
 
     async function loadData() {
