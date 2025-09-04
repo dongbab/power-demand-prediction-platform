@@ -376,21 +376,6 @@
 									<div class="metric-value capacity-efficiency" title="평균 사용량 / 정격 용량 × 100%">{station.capacity_efficiency || 'N/A'}</div>
 									<div class="metric-label">
 										용량 효율성
-										<div class="calculation-info">
-											<svg class="info-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-												<circle cx="12" cy="12" r="10"/>
-												<path d="M9,9h0a3,3,0,0,1,5.12,2.12A3,3,0,0,1,12,15"/>
-												<circle cx="12" cy="19" r=".02"/>
-											</svg>
-											<div class="tooltip">
-												<div class="tooltip-formula">
-													<strong>계산 방식:</strong> 평균전력 / 정격용량 × 100%
-												</div>
-												<div class="capacity-examples">
-													완속(AC): 7kW 기준 • 급속(DC): 100kW 기준
-												</div>
-											</div>
-										</div>
 									</div>
 								</div>
 							</div>
