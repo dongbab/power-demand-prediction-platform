@@ -16,10 +16,13 @@
 	// Debounce timer for search (클라이언트 사이드 검색이므로 더 짧은 디바운스)
 	let searchTimeout;
 	
+	// Scroll cleanup function
+	let scrollCleanup;
+	
 	onMount(async () => {
 		await stationActions.checkSystemStatus();
 		await stationActions.loadStations();
-		setupInfiniteScroll();
+		scrollCleanup = setupInfiniteScroll();
 	});
 	
 	function setupInfiniteScroll() {
@@ -37,15 +40,6 @@
 		window.addEventListener('scroll', handleScroll, { passive: true });
 		return () => window.removeEventListener('scroll', handleScroll);
 	}
-	
-	// 마운트 시 한 번만 스크롤 이벤트 설정
-	let scrollCleanup;
-	
-	afterUpdate(() => {
-		if (!scrollCleanup) {
-			scrollCleanup = setupInfiniteScroll();
-		}
-	});
 	
 	onDestroy(() => {
 		if (scrollCleanup) {

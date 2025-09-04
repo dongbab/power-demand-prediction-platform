@@ -14,11 +14,8 @@ logger: Any = None
 
 
 async def initialize_services():
-    
+    """Initialize application services."""
     global logger
-    if logger is None:
-        logger = setup_logger("charging_predictor", level="INFO")
-
     logger.info("Initializing services...")
     try:
         # API routes가 main을 참조할 수 있도록 설정
@@ -32,7 +29,7 @@ async def initialize_services():
 
 
 async def shutdown_services():
-    
+    """Shutdown application services."""
     global logger
     if logger:
         logger.info("Services shut down successfully")
@@ -40,10 +37,8 @@ async def shutdown_services():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """FastAPI application lifespan management."""
     global logger
-    if logger is None:
-        logger = setup_logger("charging_predictor", level="INFO")
-
     logger.info("=== Starting EV Charging Station Peak Predictor ===")
     try:
         await initialize_services()
@@ -66,8 +61,10 @@ def setup_routes():
             "http://localhost:5174",
             "http://127.0.0.1:5173",
             "http://127.0.0.1:5174",
+            "http://220.69.200.55:32376",
+            "https://220.69.200.55:32376",
         ],
-        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1):\d+$",
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|220\.69\.200\.55):\d+$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -85,6 +82,7 @@ def setup_routes():
 # ===== FastAPI App =====
 app = FastAPI(title="EV Charging Station Peak Predictor", version="1.0.0", lifespan=lifespan)
 
+# Initialize logger once
 logger = setup_logger("charging_predictor", level="INFO")
 setup_routes()
 
@@ -119,4 +117,4 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=32375, reload=True)

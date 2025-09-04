@@ -9,8 +9,8 @@ EV 충전소의 전력 수요를 예측하고 최적의 계약전력을 추천�
 # Python 3.8+ 필요
 python --version
 
-# 진단 도구 실행 (권장)
-python debug_tool.py
+# 통합 진단 도구 실행 (권장)
+python debug_consolidated.py --station BNS0061
 ```
 
 ### 🔧 2단계: 의존성 설치
@@ -36,9 +36,9 @@ cp your_charging_data.csv data/raw/
 
 ### 🌐 4단계: 서버 실행
 ```bash
-# 개발 서버 실행
+# 개발 서버 실행 (새 포트)
 cd backend
-python -m uvicorn app.main:app --reload
+python -m uvicorn app.main:app --host 0.0.0.0 --port 32375 --reload
 
 # 또는 간편 스크립트 사용
 ./start-dev.bat  # Windows
@@ -46,9 +46,10 @@ python -m uvicorn app.main:app --reload
 ```
 
 ### ✅ 5단계: 동작 확인
-- 브라우저에서 `http://localhost:8000` 접속
-- API 문서: `http://localhost:8000/docs`
-- 프론트엔드: `http://localhost:5173` (별도 실행 시)
+- API 서버: `http://220.69.200.55:32375`
+- API 문서: `http://220.69.200.55:32375/docs`
+- 프론트엔드: `http://220.69.200.55:32376`
+- 로컬 개발시: `http://localhost:32376`
 
 ## 🔍 주요 기능
 
@@ -159,8 +160,8 @@ GET /api/stations/{id}/timeseries.csv  # CSV 내보내기
 **증상**: `ModuleNotFoundError: No module named 'fastapi'`
 **해결책**:
 ```bash
-# 진단 도구 실행
-python debug_tool.py
+# 통합 진단 도구 실행
+python debug_consolidated.py --station BNS0061 --test data
 
 # 수동 설치
 pip install fastapi pandas numpy uvicorn
@@ -184,11 +185,11 @@ file -i data/raw/your_file.csv
 **해결책**:
 ```bash
 # 포트 사용 확인
-netstat -tulpn | grep :8000  # Linux
-netstat -ano | findstr :8000  # Windows
+netstat -tulpn | grep :32375  # Linux
+netstat -ano | findstr :32375  # Windows
 
-# 다른 포트 사용
-uvicorn app.main:app --port 8001
+# 기본 포트 사용
+uvicorn app.main:app --host 0.0.0.0 --port 32375
 ```
 
 #### 4. 메모리 부족
@@ -222,9 +223,9 @@ window.dashboardDebug.simulateError('network')
 #### API 테스트
 ```bash
 # curl을 이용한 API 테스트
-curl http://localhost:8000/api/stations
-curl http://localhost:8000/api/predict/BNS0001
-curl http://localhost:8000/health
+curl http://220.69.200.55:32375/api/stations
+curl http://220.69.200.55:32375/api/predict/BNS0001
+curl http://220.69.200.55:32375/health
 ```
 
 ### 🛠️ 성능 최적화
@@ -281,5 +282,5 @@ cp .env.example .env
 # .env 파일 편집
 
 # 프로덕션 서버 실행
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+uvicorn app.main:app --host 0.0.0.0 --port 32375 --workers 4
 ```

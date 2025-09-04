@@ -7,17 +7,17 @@ services:
       dockerfile: Dockerfile
     container_name: charging-station-backend
     ports:
-      - "8000:8000"
+      - "32375:32375"
     environment:
       - PYTHONPATH=/app
       - API_HOST=0.0.0.0
-      - API_PORT=8000
+      - API_PORT=32375
     volumes:
       - ./logs:/app/logs
       - ./:/app/data_files  # Mount CSV files
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:32375/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -29,12 +29,12 @@ services:
       dockerfile: Dockerfile
     container_name: charging-station-frontend
     ports:
-      - "80:80"
+      - "32376:32376"
     depends_on:
       - backend
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:32376/"]
       interval: 30s
       timeout: 10s
       retries: 3
