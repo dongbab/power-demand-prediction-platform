@@ -39,26 +39,30 @@
     let modelComparisons = [];
     let showModelComparison = false;
 
+    // Method comparison data
+    let methodComparison = null;
+    let showMethodComparison = false;
+
     onMount(async () => {
         // 브라우저 환경에서만 실행
-        if (typeof window === 'undefined') return;
-        
+        if (typeof window === "undefined") return;
+
         try {
             // Chart.js와 플러그인들 동적 로드
-            const [{ default: ChartJS }, dateAdapter, zoomPlugin] = 
+            const [{ default: ChartJS }, dateAdapter, zoomPlugin] =
                 await Promise.all([
                     import("chart.js/auto"),
                     import("chartjs-adapter-date-fns"),
                     import("chartjs-plugin-zoom"),
                 ]);
-            
+
             Chart = ChartJS;
             Chart.register(zoomPlugin.default);
-            
+
             // 데이터 로드
             loadAll();
         } catch (error) {
-            console.error('Chart.js 로드 실패:', error);
+            console.error("Chart.js 로드 실패:", error);
         }
     });
 
@@ -94,24 +98,32 @@
                 if (result.advanced_model_prediction) {
                     const advModel = result.advanced_model_prediction;
                     let rawPrediction = advModel.raw_prediction || 0; // 알고리즘 원본 예측값
-                    
+
                     // 비정상적으로 큰 값이면 단위 변환 (와트 → 킬로와트)
                     if (rawPrediction > 100000) {
-                        console.warn('비정상적으로 큰 예측값 감지:', rawPrediction, '-> kW로 변환');
+                        console.warn(
+                            "비정상적으로 큰 예측값 감지:",
+                            rawPrediction,
+                            "-> kW로 변환"
+                        );
                         rawPrediction = rawPrediction / 1000;
                     }
-                    
+
                     // 여전히 비정상적으로 크면 제한
                     if (rawPrediction > 10000) {
-                        console.warn('여전히 비정상적으로 큰 값:', rawPrediction, '-> 10000kW로 제한');
+                        console.warn(
+                            "여전히 비정상적으로 큰 값:",
+                            rawPrediction,
+                            "-> 10000kW로 제한"
+                        );
                         rawPrediction = 10000;
                     }
                     const finalPrediction = advModel.final_prediction || 0; // 제한 적용된 권고값
-                    
-                    console.log('PeakPowerPredictor - API 원본 데이터:', {
+
+                    console.log("PeakPowerPredictor - API 원본 데이터:", {
                         rawPrediction,
                         finalPrediction,
-                        advModel
+                        advModel,
                     });
 
                     // 제한 초과 여부 계산
@@ -119,22 +131,30 @@
                         rawPrediction > finalPrediction;
 
                     metrics = {
-                        lastMonthPeak: Math.round(
-                            result.last_month_peak || result.current_peak || 0
+                        lastMonthPeak: parseFloat(
+                            (
+                                result.last_month_peak ||
+                                result.current_peak ||
+                                0
+                            ).toFixed(1)
                         ),
-                        nextMonthRecommended: Math.round(finalPrediction), // 권고 계약 전력
+                        nextMonthRecommended: parseFloat(
+                            finalPrediction.toFixed(1)
+                        ), // 소수점 1자리
                         confidence: Math.max(
                             0,
                             Math.min(1, result.confidence || 0)
                         ),
-                        algorithmPrediction: Math.round(rawPrediction), // 알고리즘 예측값 (이미 검증됨)
+                        algorithmPrediction: parseFloat(
+                            rawPrediction.toFixed(1)
+                        ), // 소수점 1자리
                         predictionExceedsLimit: predictionExceedsLimit,
                     };
-                    
-                    console.log('PeakPowerPredictor - 계산된 메트릭:', {
+
+                    console.log("PeakPowerPredictor - 계산된 메트릭:", {
                         originalRawPrediction: rawPrediction,
                         roundedAlgorithmPrediction: Math.round(rawPrediction),
-                        finalMetrics: metrics
+                        finalMetrics: metrics,
                     });
 
                     // 고급 모델 예측 결과 저장
@@ -157,7 +177,7 @@
                         0;
                     const algorithmPrediction = Math.min(
                         result.algorithm_prediction_kw ||
-                        contractRecommendation,
+                            contractRecommendation,
                         10000
                     ); // 최대 10000kW 제한
 
@@ -172,7 +192,9 @@
                             0,
                             Math.min(1, result.confidence || 0)
                         ),
-                        algorithmPrediction: Math.round(Math.min(algorithmPrediction, 10000)),
+                        algorithmPrediction: Math.round(
+                            Math.min(algorithmPrediction, 10000)
+                        ),
                         predictionExceedsLimit:
                             result.prediction_exceeds_limit || false,
                     };
@@ -192,6 +214,12 @@
                     advancedPrediction = result.advanced_prediction;
                     visualizationData = result.visualization_data;
                     modelComparisons = result.advanced_prediction.models || [];
+                }
+
+                // Method comparison data processing
+                if (result.method_comparison) {
+                    methodComparison = result.method_comparison;
+                    console.log("Method comparison data:", methodComparison);
                 }
 
                 // DOM이 업데이트될 때까지 기다린 후 차트 생성
@@ -224,8 +252,8 @@
 
     function createChart() {
         // 브라우저 환경 체크
-        if (typeof window === 'undefined' || !Chart) return;
-        
+        if (typeof window === "undefined" || !Chart) return;
+
         if (!chartCanvas) {
             return;
         }
@@ -245,50 +273,115 @@
 
         const ctx = chartCanvas.getContext("2d");
 
-        // 백엔드에서 전처리된 데이터 직접 사용
+        // 날짜 변환 헬퍼 함수
+        const convertToYearMonth = (dateStr) => {
+            if (!dateStr) return null;
+            if (dateStr.includes(".")) {
+                // yy.mm 형태를 yyyy-mm로 변환
+                const [year, month] = dateStr.split(".");
+                const fullYear = year.length === 2 ? `20${year}` : year;
+                return `${fullYear}-${month.padStart(2, "0")}`;
+            } else if (dateStr.includes("-") && dateStr.length >= 7) {
+                // 이미 yyyy-mm 형태거나 yyyy-mm-dd 형태인 경우
+                return dateStr.substring(0, 7); // yyyy-mm만 추출
+            }
+            return dateStr;
+        };
+
+        // 실제 데이터 처리
         const actualData = chartData
             .filter((d) => d && d.actual !== null && !isNaN(d.actual))
-            .map((d) => ({
-                x: d.label || d.month,
-                y: Number(d.actual),
-            }));
+            .map((d) => {
+                const xValue = convertToYearMonth(d.month || d.label);
+                return {
+                    x: xValue,
+                    y: Number(d.actual),
+                };
+            })
+            .filter((d) => d.x); // null 값 제거
 
+        // 실제 데이터의 마지막 시점 찾기
+        const actualDataSorted = [...actualData].sort((a, b) =>
+            a.x.localeCompare(b.x)
+        );
+        const lastActualMonth =
+            actualDataSorted.length > 0
+                ? actualDataSorted[actualDataSorted.length - 1].x
+                : null;
+
+        console.log("실제 데이터 마지막 월:", lastActualMonth);
+        console.log(
+            "실제 데이터 전체:",
+            actualDataSorted.map((d) => d.x)
+        );
+
+        // Dynamic Pattern 예측 데이터 처리 (실제 데이터 이후만)
         const predictedData = chartData
             .filter((d) => d && d.predicted !== null && !isNaN(d.predicted))
-            .map((d) => ({
-                x: d.label || d.month,
-                y: Number(d.predicted),
-            }));
+            .map((d) => {
+                const xValue = convertToYearMonth(d.month || d.label);
+                return {
+                    x: xValue,
+                    y: Number(d.predicted),
+                };
+            })
+            .filter((d) => d.x && (!lastActualMonth || d.x > lastActualMonth)); // 실제 데이터 이후만
+
+        console.log(
+            "Dynamic Pattern 예측 데이터:",
+            predictedData.map((d) => d.x)
+        );
+
+        // 모든 x 값을 수집하고 정렬
+        const allXValues = new Set();
+        actualData.forEach((d) => allXValues.add(d.x));
+        predictedData.forEach((d) => allXValues.add(d.x));
+
+        const sortedXValues = Array.from(allXValues).sort();
+
+        console.log("전체 X 값들 (정렬됨):", sortedXValues);
+
+        // 데이터셋 구성
+        const datasets = [];
+
+        // 실제 데이터 - 항상 포함
+        if (actualData.length > 0) {
+            datasets.push({
+                label: "실제 데이터",
+                data: actualData,
+                borderColor: "#10b981",
+                backgroundColor: "#10b981",
+                borderWidth: 3,
+                pointRadius: 5,
+                pointHoverRadius: 7,
+                fill: false,
+                tension: 0.2,
+                spanGaps: false,
+            });
+        }
+
+        // 적응형 예측 데이터 - 실제 데이터 이후만
+        if (predictedData.length > 0) {
+            datasets.push({
+                label: "적응형 예측",
+                data: predictedData,
+                borderColor: "#3b82f6",
+                backgroundColor: "rgba(59, 130, 246, 0.1)",
+                borderWidth: 2,
+                pointRadius: 4,
+                pointHoverRadius: 6,
+                fill: true,
+                tension: 0.2,
+                borderDash: [5, 5],
+                spanGaps: false,
+            });
+        }
 
         try {
             chartInstance = new Chart(ctx, {
                 type: "line",
                 data: {
-                    datasets: [
-                        {
-                            label: "실제",
-                            data: actualData,
-                            borderColor: "#10b981",
-                            backgroundColor: "#10b981",
-                            borderWidth: 3,
-                            pointRadius: 5,
-                            pointHoverRadius: 7,
-                            fill: false,
-                            tension: 0.2,
-                        },
-                        {
-                            label: "예측",
-                            data: predictedData,
-                            borderColor: "#3b82f6",
-                            backgroundColor: "rgba(59, 130, 246, 0.1)",
-                            borderWidth: 2,
-                            pointRadius: 4,
-                            pointHoverRadius: 6,
-                            fill: true,
-                            tension: 0.2,
-                            borderDash: [5, 5],
-                        },
-                    ],
+                    datasets: datasets,
                 },
                 options: {
                     responsive: true,
@@ -319,6 +412,9 @@
                             cornerRadius: 8,
                             padding: 12,
                             callbacks: {
+                                title: function (context) {
+                                    return `${context[0].label} 월`;
+                                },
                                 label: function (context) {
                                     return `${context.dataset.label}: ${context.parsed.y.toFixed(1)}kW`;
                                 },
@@ -350,28 +446,28 @@
                     scales: {
                         x: {
                             type: "category",
-                            labels:
-                                chartData.length > 0
-                                    ? chartData.map((d) => d.label || d.month)
-                                    : [],
-                            title: {
-                                display: true,
-                                text: "월별",
-                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#e5e7eb' : '#374151',
-                                font: {
-                                    size: 14,
-                                    weight: "bold",
-                                },
-                            },
+                            labels: sortedXValues,
                             grid: {
-                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.1)',
+                                color:
+                                    document.documentElement.getAttribute(
+                                        "data-theme"
+                                    ) === "dark"
+                                        ? "rgba(255, 255, 255, 0.05)"
+                                        : "rgba(0, 0, 0, 0.1)",
                                 drawBorder: false,
                             },
                             ticks: {
-                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#d1d5db' : '#4b5563',
+                                color:
+                                    document.documentElement.getAttribute(
+                                        "data-theme"
+                                    ) === "dark"
+                                        ? "#d1d5db"
+                                        : "#4b5563",
                                 font: {
                                     size: 11,
                                 },
+                                maxRotation: 45,
+                                minRotation: 0,
                             },
                         },
                         y: {
@@ -379,18 +475,33 @@
                             title: {
                                 display: true,
                                 text: "전력 (kW)",
-                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#e5e7eb' : '#374151',
+                                color:
+                                    document.documentElement.getAttribute(
+                                        "data-theme"
+                                    ) === "dark"
+                                        ? "#e5e7eb"
+                                        : "#374151",
                                 font: {
                                     size: 14,
                                     weight: "bold",
                                 },
                             },
                             grid: {
-                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                                color:
+                                    document.documentElement.getAttribute(
+                                        "data-theme"
+                                    ) === "dark"
+                                        ? "rgba(255, 255, 255, 0.1)"
+                                        : "rgba(0, 0, 0, 0.1)",
                                 drawBorder: false,
                             },
                             ticks: {
-                                color: document.documentElement.getAttribute('data-theme') === 'dark' ? '#d1d5db' : '#4b5563',
+                                color:
+                                    document.documentElement.getAttribute(
+                                        "data-theme"
+                                    ) === "dark"
+                                        ? "#d1d5db"
+                                        : "#4b5563",
                                 font: {
                                     size: 11,
                                 },
@@ -416,7 +527,6 @@
 </script>
 
 <div class="peak-predictor">
-
     <!-- 상단 지표 카드 -->
     <div class="metrics-row">
         <MetricCard
@@ -430,12 +540,16 @@
             title="다음 달 권고계약 전력"
             value={metrics.nextMonthRecommended}
             unit="kW"
-            type={metrics.nextMonthRecommended >= 80 ? "contract-high" : metrics.nextMonthRecommended >= 50 ? "contract-medium" : "contract-low"}
+            type={metrics.nextMonthRecommended >= 80
+                ? "contract-high"
+                : metrics.nextMonthRecommended >= 50
+                  ? "contract-medium"
+                  : "contract-low"}
             highlighted={true}
-            tooltip="예측된 최고전력 + 안전마진으로 계산한 권고값
+            tooltip="알고리즘 예측값 + 안전마진으로 계산한 권고값
 
 • 안전마진: 8-20% (데이터 품질에 따라 조정)
-• 충전기별 제한:
+• 충전기별 권고 계약 전력 제한:
   - 완속충전기: 최대 7kW
   - 급속충전기: 최대 100kW"
         />
@@ -456,8 +570,12 @@
             title="알고리즘 예측값"
             value={metrics.algorithmPrediction}
             unit="kW"
-            type={metrics.algorithmPrediction > 100 ? "algorithm-exceeded" : "algorithm"}
-            subtitle={metrics.algorithmPrediction > 100 ? "100kW 제한 초과" : "예측 범위 내"}
+            type={metrics.algorithmPrediction > 100
+                ? "algorithm-exceeded"
+                : "algorithm"}
+            subtitle={metrics.algorithmPrediction > 100
+                ? "100kW 제한 초과"
+                : "예측 범위 내"}
             tooltip="순수한 알고리즘 예측값
 
 • 제한 없이 계산된 원시 예측 결과
@@ -474,17 +592,36 @@
                 {#if dataInfo.startDate && dataInfo.endDate}
                     <div class="data-info">
                         <div class="data-period">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                            >
                                 <path d="M8 2v4"></path>
                                 <path d="M16 2v4"></path>
-                                <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+                                <rect x="3" y="4" width="18" height="18" rx="2"
+                                ></rect>
                                 <path d="M3 10h18"></path>
                             </svg>
-                            <span>{fmtDate(dataInfo.startDate)} ~ {fmtDate(dataInfo.endDate)}</span>
+                            <span
+                                >{fmtDate(dataInfo.startDate)} ~ {fmtDate(
+                                    dataInfo.endDate
+                                )}</span
+                            >
                         </div>
                         <div class="data-stats">
                             <span class="stat-badge">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <svg
+                                    width="12"
+                                    height="12"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                >
                                     <path d="M12 20V10"></path>
                                     <path d="M18 20V4"></path>
                                     <path d="M6 20v-6"></path>
@@ -492,14 +629,27 @@
                                 {(dataInfo.recordCount || 0).toLocaleString()}개
                             </span>
                             <span class="duration-badge">
-                                {Math.ceil((new Date(dataInfo.endDate) - new Date(dataInfo.startDate)) / (1000 * 60 * 60 * 24))}일
+                                {Math.ceil(
+                                    (new Date(dataInfo.endDate) -
+                                        new Date(dataInfo.startDate)) /
+                                        (1000 * 60 * 60 * 24)
+                                )}일
                             </span>
                         </div>
                     </div>
                 {:else}
                     <div class="no-data-info">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                        <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path
+                                d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                            ></path>
                             <line x1="12" y1="9" x2="12" y2="13"></line>
                             <line x1="12" y1="17" x2="12.01" y2="17"></line>
                         </svg>
@@ -508,11 +658,20 @@
                 {/if}
                 {#if lastUpdated}
                     <div class="last-updated-info">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
                             <circle cx="12" cy="12" r="10"></circle>
                             <polyline points="12,6 12,12 16,14"></polyline>
                         </svg>
-                        <span>마지막 업데이트 : {lastUpdated.toLocaleTimeString()}</span>
+                        <span
+                            >마지막 업데이트 : {lastUpdated.toLocaleTimeString()}</span
+                        >
                     </div>
                 {/if}
                 <div class="chart-controls">
@@ -521,7 +680,11 @@
                         on:click={resetZoom}
                         title="줌 초기화"
                     >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                        >
                             <path d="M3 3v18h18" />
                             <path d="M18.5 9.5L12 16l-4-4-3.5 3.5" />
                         </svg>
@@ -549,6 +712,86 @@
             </div>
         {/if}
     </div>
+
+    <!-- Method Comparison Section -->
+    {#if methodComparison}
+        <div class="method-comparison-card">
+            <div class="comparison-header">
+                <h3>예측 방법 비교</h3>
+                <button
+                    class="toggle-btn"
+                    on:click={() =>
+                        (showMethodComparison = !showMethodComparison)}
+                    class:active={showMethodComparison}
+                >
+                    {showMethodComparison ? "숨기기" : "자세히 보기"}
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        class:rotated={showMethodComparison}
+                    >
+                        <path d="M6 9l6 6 6-6" />
+                    </svg>
+                </button>
+            </div>
+
+            {#if showMethodComparison}
+                <div class="comparison-content">
+                    {#if methodComparison}
+                        <div class="comparison-methods">
+                            <!-- Dynamic Pattern Method -->
+                            <div class="method-card">
+                                <div class="method-header">
+                                    <div class="method-indicator dynamic"></div>
+                                    <h4>Dynamic Pattern 예측</h4>
+                                    <span class="confidence-badge dynamic">
+                                        {Math.round(
+                                            methodComparison.dynamic_patterns
+                                                .confidence * 100
+                                        )}%
+                                    </span>
+                                </div>
+                                <div class="method-details">
+                                    <div class="metric">
+                                        <span class="label">예측값:</span>
+                                        <span class="value"
+                                            >{methodComparison.dynamic_patterns
+                                                .predicted_value}kW</span
+                                        >
+                                    </div>
+                                    <div class="metric">
+                                        <span class="label">원본 예측:</span>
+                                        <span class="value"
+                                            >{Math.round(
+                                                methodComparison
+                                                    .dynamic_patterns
+                                                    .raw_prediction
+                                            )}kW</span
+                                        >
+                                    </div>
+                                    <div class="metric">
+                                        <span class="label">패턴 조정:</span>
+                                        <span
+                                            class="value status"
+                                            class:applied={methodComparison
+                                                .dynamic_patterns
+                                                .applied_adjustments}
+                                        >
+                                            {methodComparison.dynamic_patterns
+                                                .applied_adjustments
+                                                ? "적용됨"
+                                                : "미적용"}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    {/if}
+                </div>
+            {/if}
+        </div>
+    {/if}
 </div>
 
 <style>
@@ -565,9 +808,6 @@
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
         gap: 12px;
     }
-
-
-
 
     .chart-card {
         background: var(--bg-secondary);
@@ -623,7 +863,8 @@
         gap: 8px;
     }
 
-    .stat-badge, .duration-badge {
+    .stat-badge,
+    .duration-badge {
         display: inline-flex;
         align-items: center;
         gap: 4px;
@@ -666,7 +907,6 @@
         display: flex;
         gap: 8px;
     }
-
 
     .zoom-reset-btn {
         display: flex;
@@ -793,7 +1033,8 @@
             gap: 6px;
         }
 
-        .stat-badge, .duration-badge {
+        .stat-badge,
+        .duration-badge {
             padding: 3px 6px;
             font-size: 0.75rem;
         }
@@ -803,4 +1044,186 @@
         }
     }
 
+    /* Method Comparison Styles */
+    .method-comparison-card {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 16px;
+        padding: 20px;
+        box-shadow: 0 2px 8px var(--shadow);
+    }
+
+    .comparison-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+    }
+
+    .comparison-header h3 {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .toggle-btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 16px;
+        background: var(--bg-secondary);
+        color: var(--text-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        font-size: 0.9rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .toggle-btn:hover {
+        background: var(--primary-color);
+        color: white;
+        border-color: var(--primary-color);
+    }
+
+    .toggle-btn.active {
+        background: var(--primary-color);
+        color: white;
+        border-color: var(--primary-color);
+    }
+
+    .toggle-btn svg {
+        width: 16px;
+        height: 16px;
+        transition: transform 0.2s ease;
+    }
+
+    .toggle-btn svg.rotated {
+        transform: rotate(180deg);
+    }
+
+    .comparison-content {
+        border-top: 1px solid var(--border-color);
+        padding-top: 16px;
+    }
+
+    .comparison-methods {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 16px;
+    }
+
+    .method-card {
+        background: linear-gradient(
+            135deg,
+            var(--bg-secondary) 0%,
+            rgba(var(--primary-rgb), 0.02) 100%
+        );
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        padding: 16px;
+        transition: all 0.2s ease;
+    }
+
+    .method-card:hover {
+        box-shadow: 0 4px 12px var(--shadow);
+        transform: translateY(-2px);
+    }
+
+    .method-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+    }
+
+    .method-indicator {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+
+    .method-indicator.dynamic {
+        background: #3b82f6;
+        box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+    }
+
+    .method-header h4 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        flex-grow: 1;
+    }
+
+    .confidence-badge {
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: white;
+    }
+
+    .confidence-badge.dynamic {
+        background: #3b82f6;
+    }
+
+    .method-details {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .metric {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 6px 0;
+    }
+
+    .metric .label {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+        font-weight: 500;
+    }
+
+    .metric .value {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .metric .value.status {
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 0.8rem;
+    }
+
+    .metric .value.status.applied {
+        background: rgba(34, 197, 94, 0.1);
+        color: #16a34a;
+    }
+
+    .metric .value.status.success {
+        background: rgba(34, 197, 94, 0.1);
+        color: #16a34a;
+    }
+
+    .metric .value.status.error {
+        background: rgba(239, 68, 68, 0.1);
+        color: #dc2626;
+    }
+
+    .error-message {
+        margin-top: 8px;
+        padding: 8px;
+        background: rgba(239, 68, 68, 0.1);
+        border: 1px solid rgba(239, 68, 68, 0.2);
+        border-radius: 6px;
+        font-size: 0.85rem;
+        color: #dc2626;
+        line-height: 1.4;
+    }
 </style>

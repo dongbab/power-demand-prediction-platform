@@ -1,8 +1,9 @@
 <script>
 	import { onMount, onDestroy } from 'svelte';
+	import { getChartModules } from '../../lib/chart-utils.js';
 	
-	// Chart.js는 클라이언트에서만 동적 로드
 	let Chart;
+	let chartInstance = null;
 	
 	export let data = [];
 	
@@ -20,10 +21,7 @@
 		if (typeof window === 'undefined') return;
 		
 		try {
-			// 최적화된 Chart.js 모듈 로드
-			const { getChartModules } = await import('../../lib/chart-utils.js');
 			const modules = await getChartModules();
-			
 			if (modules) {
 				Chart = modules.Chart;
 				// 차트 초기화

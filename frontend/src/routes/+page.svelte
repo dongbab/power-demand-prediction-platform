@@ -7,7 +7,7 @@
 	import { searchQuery, sortBy, sortOrder, filteredStations, searchActions } from '../stores/searchStore.ts';
 	import LoadingSpinner from '../components/LoadingSpinner.svelte';
 	import ThemeToggle from '../components/ThemeToggle.svelte';
-	import FileUpload from '../lib/components/FileUpload.svelte';
+	import FileUpload from '../components/FileUpload.svelte';
 	import { tweened } from 'svelte/motion';
 	import { cubicOut } from 'svelte/easing';
 
@@ -1268,6 +1268,20 @@
     }
     .filter-controls.modern .control-group {
         min-width: 0;
+    }
+    
+    .header-actions {
+    	flex-direction: column;
+    	gap: 8px;
+    	align-items: flex-end;
+    }
+    
+    .batch-upload-section {
+    	padding: 1.5rem 1rem;
+    }
+    
+    .section-header h2 {
+    	font-size: 1.3rem;
     }
 }
 /* End modern filter controls */

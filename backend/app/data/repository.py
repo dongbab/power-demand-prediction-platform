@@ -217,12 +217,39 @@ class ChargingDataRepository:
 
             # Add aggregated "ALL" station
             if stations:
+                # 실제 충전소들의 충전기 구분과 커넥터 타입 집계
+                charger_types = []
+                connector_types = []
+                
+                for station in stations.values():
+                    if station.charger_type and station.charger_type not in charger_types:
+                        charger_types.append(station.charger_type)
+                    if station.connector_type and station.connector_type not in connector_types:
+                        connector_types.append(station.connector_type)
+                
+                # 대표 충전기 타입 결정
+                if len(charger_types) == 1:
+                    primary_charger_type = charger_types[0]
+                elif len(charger_types) > 1:
+                    # 급속/완속 등이 섞여있는 경우
+                    primary_charger_type = " + ".join(charger_types)
+                else:
+                    primary_charger_type = "충전기 정보 없음"
+                
+                # 대표 커넥터 타입 결정
+                if len(connector_types) == 1:
+                    primary_connector_type = connector_types[0]
+                elif len(connector_types) > 1:
+                    primary_connector_type = " + ".join(connector_types[:3])  # 최대 3개까지만 표시
+                else:
+                    primary_connector_type = "커넥터 정보 없음"
+                
                 stations["ALL"] = ChargingStation(
                     station_id="ALL",
                     name="전체 충전소 통합 분석",
                     location=f"전국 ({len(stations)}개 충전소)",
-                    charger_type="100kW 급속충전기",
-                    connector_type="DC콤보",
+                    charger_type=primary_charger_type,
+                    connector_type=primary_connector_type,
                     region="전국",
                     city="전체",
                     status="정상 운영",

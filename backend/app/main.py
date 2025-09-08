@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from .core.logger import setup_logger
+from .core.config import settings
 
 # ===== Global Variables =====
 logger: Any = None
@@ -20,6 +21,12 @@ async def initialize_services():
     try:
         # API routes가 main을 참조할 수 있도록 설정
         from .api.routes import set_main_module
+        
+        # 배치 처리를 위한 디렉토리 생성
+        import os
+        os.makedirs("data/predictions", exist_ok=True)
+        os.makedirs("data/uploads", exist_ok=True)
+        logger.info("Created data directories")
 
         set_main_module(sys.modules[__name__])
         logger.info("Main module reference set for routes")
@@ -55,15 +62,7 @@ def setup_routes():
     
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:3000",
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:5174",
-            "http://220.69.200.55:32376",
-            "https://220.69.200.55:32376",
-        ],
+        allow_origins=settings.cors_origins,
         allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|220\.69\.200\.55):\d+$",
         allow_credentials=True,
         allow_methods=["*"],
@@ -73,17 +72,19 @@ def setup_routes():
     )
 
     from .api.routes import api_router
+    from .api.batch import router as batch_router
 
     app.include_router(api_router, prefix="/api")
+    app.include_router(batch_router, prefix="/api")
     if logger:
-        logger.info("Routes configured")
+        logger.info("Routes configured (including batch endpoints)")
 
 
 # ===== FastAPI App =====
 app = FastAPI(title="EV Charging Station Peak Predictor", version="1.0.0", lifespan=lifespan)
 
 # Initialize logger once
-logger = setup_logger("charging_predictor", level="INFO")
+logger = setup_logger("charging_predictor", level=settings.log_level)
 setup_routes()
 
 

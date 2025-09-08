@@ -38,7 +38,7 @@ df['충전시작일시'] = pd.to_datetime(df['충전시작일시'])
 df['date'] = df['충전시작일시'].dt.date
 ```
 
-### 3. 데이터 집계 및 통계 계산
+### 3. 데이터 집계 및 통계 계산 
 ```python
 # 일별 에너지 집계
 daily_energy = df_clean.groupby("date")["충전량(kWh)"].sum()
@@ -107,10 +107,6 @@ return JSONResponse(content=response)
     "start_date": "2025-06-06",    // 데이터 시작일
     "end_date": "2025-07-31"       // 데이터 종료일
   },
-  "insights": [
-    "최고 에너지 사용량은 1057.37 kWh입니다",
-    "평균 대비 높은 변동성을 보입니다"
-  ],
   "station_id": "BNS1058",
   "station_name": "서울 흑석운수"
 }
@@ -150,31 +146,140 @@ return JSONResponse(content=response)
 }
 ```
 
-### 3. 최고전력 예측 API
-**엔드포인트**: `GET /api/stations/{station_id}/predictions`
+### 3. 최고전력 예측 API (Dynamic Pattern + SARIMA)
+**엔드포인트**: `GET /api/stations/{station_id}/prediction`
 
 **응답 구조**:
 ```json
 {
   "success": true,
-  "peak_power_data": [
+  "predicted_peak": 87.5,                    // 최종 예측 최고전력 (kW)
+  "recommended_contract_kw": 100.0,          // 추천 계약전력 (kW)
+  
+  "station_info": {
+    "station_id": "BNS1058",
+    "station_name": "서울 흑석운수",
+    "location": "서울특별시 동작구"
+  },
+  
+  // Dynamic Pattern 예측 결과
+  "dynamic_prediction": {
+    "raw_prediction": 94.8,                 // 원시 예측값 (kW)
+    "adjusted_prediction": 87.5,            // 조정된 예측값 (kW)
+    "confidence": 0.85,                     // 신뢰도 (0-1)
+    "applied_adjustments": true,            // 조정 적용 여부
+    "patterns_used": {
+      "seasonal_factor": 1.1,              // 계절 요인
+      "weekly_factor": 0.95,               // 요일 요인  
+      "hourly_factor": 1.05                // 시간 요인
+    }
+  },
+  
+  // SARIMA 예측 결과
+  "sarima_prediction": {
+    "predicted_value": 82.3,               // SARIMA 예측값 (kW)
+    "confidence": 0.78,                    // SARIMA 신뢰도 (0-1)
+    "success": true,                       // SARIMA 실행 성공 여부
+    "error_message": null,                 // 에러 메시지 (있을 경우)
+    "forecast_data": [                     // 6개월 예측 데이터
+      {
+        "date": "2025-10",
+        "value": 82.3,
+        "confidence_lower": 74.1,          // 신뢰구간 하한
+        "confidence_upper": 90.5           // 신뢰구간 상한
+      },
+      {
+        "date": "2025-11", 
+        "value": 83.1,
+        "confidence_lower": 74.8,
+        "confidence_upper": 91.4
+      }
+      // ... 4개월 더
+    ]
+  },
+  
+  // 예측 방법 비교
+  "method_comparison": {
+    "dynamic_patterns": {
+      "predicted_value": 87,              // Dynamic 예측값
+      "confidence": 0.85,                 // Dynamic 신뢰도
+      "strengths": ["실시간 적응", "패턴 변화 반영"],
+      "weaknesses": ["단기 변동성"]
+    },
+    "sarima": {
+      "predicted_value": 82,              // SARIMA 예측값  
+      "confidence": 0.78,                 // SARIMA 신뢰도
+      "strengths": ["시계열 안정성", "장기 추세"],
+      "weaknesses": ["패턴 변화 지연"]
+    }
+  },
+  
+  // 차트용 시계열 데이터
+  "timeseries_data": [
     {
       "date": "2025-06-06",
-      "peak_power": 97.16,          // 순간최고전력 (kW)
-      "type": "actual"
+      "actual": 94.2,                     // 실제 최고전력 (kW)
+      "type": "historical"
     },
     {
-      "date": "2025-08-01",
-      "peak_power": 89.5,
-      "type": "predicted"
+      "date": "2025-08-15", 
+      "dynamic_prediction": 87.5,         // Dynamic Pattern 예측
+      "sarima_prediction": 82.3,          // SARIMA 예측
+      "type": "forecast"
     }
+  ]
+}
+```
+
+### 4. 월별 계약전력 추천 API
+**엔드포인트**: `GET /api/stations/{station_id}/monthly-contract`
+
+**응답 구조**:
+```json
+{
+  "success": true,
+  "monthly_data": [
+    {
+      "month": "2025-01",                    // 월 (YYYY-MM)
+      "recommended_contract_kw": 95.0,       // 추천 계약전력 (kW)
+      "predicted_peak": 87.2,               // 예상 최고전력 (kW)  
+      "safety_margin": 8.0,                 // 안전 마진 (kW)
+      "confidence": 0.82,                   // 신뢰도 (0-1)
+      "cost_estimate": 285000               // 예상 전력 요금 (원)
+    },
+    {
+      "month": "2025-02",
+      "recommended_contract_kw": 92.0,
+      "predicted_peak": 84.5,
+      "safety_margin": 7.5,
+      "confidence": 0.79,
+      "cost_estimate": 276000
+    }
+    // ... 12개월 데이터
   ],
-  "power_statistics": {
-    "max_peak": 125.8,            // 최고 피크전력
-    "avg_peak": 89.2,             // 평균 피크전력
-    "min_peak": 45.3              // 최저 피크전력
+  "year_summary": {
+    "avg_recommended": 92.5,               // 연평균 추천 계약전력 (kW)
+    "min_contract": 85.0,                  // 최소 계약전력 (kW)
+    "max_contract": 105.0,                 // 최대 계약전력 (kW)
+    "total_cost_savings": 150000,          // 연간 예상 절약액 (원)
+    "optimal_annual_contract": 95.0        // 연간 최적 계약전력 (kW)
   },
   "station_id": "BNS1058"
+}
+```
+
+### 5. 시스템 상태 확인 API
+**엔드포인트**: `GET /health`
+
+**응답 구조**:
+```json
+{
+  "status": "healthy",
+  "timestamp": "2025-09-05T14:23:30.153905",
+  "version": "0.0.4",
+  "uptime_seconds": 3600,
+  "database_status": "connected",
+  "cache_status": "active"
 }
 ```
 
@@ -268,9 +373,9 @@ def create_monthly_summary(daily_energy):
 
 ## 🎨 프론트엔드 JSON 처리
 
-### 1. API 응답 수신
+### 1. PowerDemandPredictor JSON 처리
 ```javascript
-// PowerDemandPredictor.svelte
+// PowerDemandPredictor.svelte - 전력량 예측
 async function loadEnergyForecast() {
     const url = `/api/stations/${stationId}/energy-demand-forecast?days=${days}`;
     
@@ -299,9 +404,95 @@ async function loadEnergyForecast() {
 }
 ```
 
-### 2. JSON 데이터 바인딩
+### 2. PeakPowerPredictor JSON 처리
 ```javascript
-// 반응형 계산 - JSON 데이터를 기반으로 UI 업데이트
+// PeakPowerPredictor.svelte - 최고전력 예측 (Dynamic + SARIMA)
+async function loadPeakPrediction() {
+    const url = `/api/stations/${stationId}/prediction`;
+    
+    try {
+        const response = await fetch(url, {
+            cache: "no-cache",
+            signal: AbortSignal.timeout(15000)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            // JSON 응답을 내부 상태로 변환
+            peakPrediction = {
+                predicted_peak: result.predicted_peak,
+                recommended_contract_kw: result.recommended_contract_kw,
+                dynamic_prediction: result.dynamic_prediction,
+                sarima_prediction: result.sarima_prediction,
+                method_comparison: result.method_comparison,
+                timeseries_data: result.timeseries_data
+            };
+            
+            // 차트 데이터 준비
+            updateChartData(result.timeseries_data);
+        }
+    } catch (error) {
+        console.error('Peak prediction JSON 파싱 오류:', error);
+        peakPrediction = null;
+    }
+}
+
+// 3-라인 차트 데이터 준비
+function updateChartData(timeseries_data) {
+    const actualData = timeseries_data
+        .filter(item => item.type === 'historical' && item.actual)
+        .map(item => ({
+            x: item.date,
+            y: item.actual
+        }));
+    
+    const dynamicData = timeseries_data
+        .filter(item => item.dynamic_prediction !== undefined)
+        .map(item => ({
+            x: item.date, 
+            y: item.dynamic_prediction
+        }));
+    
+    const sarimaData = timeseries_data
+        .filter(item => item.sarima_prediction !== undefined)
+        .map(item => ({
+            x: item.date,
+            y: item.sarima_prediction
+        }));
+    
+    chartData = {
+        datasets: [
+            {
+                label: '실제 데이터',
+                data: actualData,
+                borderColor: '#10b981',
+                backgroundColor: 'transparent'
+            },
+            {
+                label: 'Dynamic Pattern 예측',
+                data: dynamicData,
+                borderColor: '#3b82f6',
+                borderDash: [5, 5],
+                backgroundColor: 'transparent'
+            },
+            {
+                label: 'SARIMA 예측',
+                data: sarimaData,
+                borderColor: '#f59e0b',
+                borderDash: [10, 5],  
+                backgroundColor: 'transparent'
+            }
+        ]
+    };
+}
+```
+
+### 3. JSON 데이터 바인딩 (반응형)
+
+#### PowerDemandPredictor 반응형 계산
+```javascript
+// 기간별 전력량 예측 계산 - JSON 데이터 기반 UI 업데이트
 $: predictedEnergyDemand = (() => {
     if (!energyForecast?.energy_statistics) {
         return 0;
@@ -313,12 +504,45 @@ $: predictedEnergyDemand = (() => {
     
     return avgDaily * currentPeriod.multiplier;
 })();
+
+// 에너지 통계 반응형 표시
+$: energyStats = energyForecast?.energy_statistics || {};
+$: monthlyData = energyForecast?.monthly_summary || [];
 ```
 
-### 3. Chart.js 데이터 변환
+#### PeakPowerPredictor 반응형 계산
 ```javascript
-function prepareChartData(daily_consumption) {
-    // JSON 배열을 차트 데이터로 변환
+// 예측 방법 비교 데이터
+$: methodComparison = peakPrediction?.method_comparison || null;
+
+// Dynamic Pattern 신뢰도 표시
+$: dynamicConfidence = methodComparison?.dynamic_patterns?.confidence 
+    ? Math.round(methodComparison.dynamic_patterns.confidence * 100) 
+    : 0;
+
+// SARIMA 신뢰도 표시  
+$: sarimaConfidence = methodComparison?.sarima?.confidence
+    ? Math.round(methodComparison.sarima.confidence * 100)
+    : 0;
+
+// 최종 추천 계약전력
+$: recommendedContract = peakPrediction?.recommended_contract_kw || 0;
+
+// 예측값 차이 계산
+$: predictionDifference = methodComparison
+    ? Math.abs(
+        methodComparison.dynamic_patterns.predicted_value - 
+        methodComparison.sarima.predicted_value
+      ).toFixed(1)
+    : 0;
+```
+
+### 4. Chart.js 데이터 변환
+
+#### PowerDemandPredictor 차트 데이터
+```javascript
+function prepareEnergyChartData(daily_consumption) {
+    // JSON 배열을 에너지 차트 데이터로 변환
     const actualData = daily_consumption
         .filter(item => item.type === 'actual')
         .map(item => ({
@@ -339,13 +563,74 @@ function prepareChartData(daily_consumption) {
                 label: '실제 에너지',
                 data: actualData,
                 borderColor: 'rgb(59, 130, 246)',
-                backgroundColor: 'rgba(59, 130, 246, 0.1)'
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                fill: false
             },
             {
                 label: '예측 에너지',
                 data: predictedData,
                 borderColor: 'rgb(239, 68, 68)',
-                backgroundColor: 'rgba(239, 68, 68, 0.1)'
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                borderDash: [5, 5],
+                fill: false
+            }
+        ]
+    };
+}
+```
+
+#### PeakPowerPredictor 3-라인 차트 데이터  
+```javascript
+function preparePeakChartData(timeseries_data) {
+    // JSON 배열을 3-라인 차트 데이터로 변환
+    const actualData = timeseries_data
+        .filter(item => item.actual !== undefined)
+        .map(item => ({
+            x: item.date,
+            y: item.actual
+        }));
+    
+    const dynamicData = timeseries_data
+        .filter(item => item.dynamic_prediction !== undefined)
+        .map(item => ({
+            x: item.date,
+            y: item.dynamic_prediction
+        }));
+    
+    const sarimaData = timeseries_data
+        .filter(item => item.sarima_prediction !== undefined)  
+        .map(item => ({
+            x: item.date,
+            y: item.sarima_prediction
+        }));
+    
+    return {
+        datasets: [
+            {
+                label: '실제 최고전력',
+                data: actualData,
+                borderColor: '#10b981',
+                backgroundColor: 'transparent',
+                pointRadius: 3,
+                fill: false
+            },
+            {
+                label: 'Dynamic Pattern 예측',
+                data: dynamicData,
+                borderColor: '#3b82f6',
+                backgroundColor: 'transparent',
+                borderDash: [5, 5],
+                pointRadius: 0,
+                fill: false
+            },
+            {
+                label: 'SARIMA 예측',
+                data: sarimaData,
+                borderColor: '#f59e0b', 
+                backgroundColor: 'transparent',
+                borderDash: [10, 5],
+                pointRadius: 0,
+                fill: false
             }
         ]
     };
@@ -515,13 +800,34 @@ def validate_json_response(data, schema):
 
 이 플랫폼의 JSON 응답 시스템은 다음과 같이 동작합니다:
 
+### 🔄 데이터 처리 파이프라인
 1. **CSV 입력** → pandas DataFrame으로 로드
 2. **데이터 전처리** → 날짜 변환, 컬럼 매핑, 집계
-3. **통계 계산** → 평균, 합계, 표준편차 등 계산
-4. **예측 생성** → 계절적/주간 요인을 고려한 향후 데이터
+3. **이중 예측 시스템**:
+   - **Dynamic Pattern**: 적응형 계절/요일/시간 패턴 분석
+   - **SARIMA**: 시계열 자동회귀 모델 예측
+4. **통계 계산** → 평균, 합계, 표준편차, 신뢰도 등 계산
 5. **JSON 직렬화** → Python dict → JSON 문자열
 6. **HTTP 응답** → FastAPI JSONResponse
-7. **프론트엔드 수신** → fetch API로 JSON 파싱
-8. **UI 렌더링** → Svelte 반응형 상태로 차트/메트릭 업데이트
+
+### 🎨 프론트엔드 처리 흐름
+1. **API 호출** → fetch로 JSON 데이터 요청
+2. **JSON 파싱** → JavaScript 객체로 변환
+3. **반응형 상태** → Svelte store에 데이터 저장
+4. **차트 데이터 변환** → Chart.js 형식으로 매핑
+5. **UI 렌더링** → 실시간 차트/메트릭 업데이트
+
+### 📈 주요 JSON 응답 유형
+- **전력량 예측**: `timeseries_data`, `energy_statistics`, `monthly_summary`
+- **최고전력 예측**: `dynamic_prediction`, `sarima_prediction`, `method_comparison`
+- **계약전력 추천**: `monthly_data`, `year_summary`, `cost_estimate`
+- **충전소 목록**: 페이징, 필터링, 정렬 지원
+
+### 🚀 성능 최적화 기능
+- **멀티레벨 캐싱**: 메모리 + Redis 캐시
+- **병렬 처리**: Dynamic Pattern과 SARIMA 동시 실행
+- **JSON 압축**: 소수점 제한, 불필요 데이터 제거
+- **스키마 검증**: 응답 데이터 무결성 보장
+- **에러 처리**: 단계별 예외 처리 및 복구
 
 각 단계에서 에러 처리, 캐싱, 성능 최적화가 적용되어 안정적이고 빠른 JSON 응답을 제공합니다.

@@ -13,7 +13,17 @@ python --version
 python debug_consolidated.py --station BNS0061
 ```
 
-### 🔧 2단계: 의존성 설치
+### 🔧 2단계: 환경 설정
+```bash
+# 1. 환경변수 파일 복사 (선택사항)
+cp .env .env.local  # 로컬 개발용
+cp .env.production .env.prod  # 프로덕션용
+
+# 2. 필요시 환경변수 수정
+# .env 파일에서 IP, 포트, 보안키 등 설정
+```
+
+### 🔧 3단계: 의존성 설치
 ```bash
 # 백엔드 의존성 설치
 cd backend
@@ -36,13 +46,18 @@ cp your_charging_data.csv data/raw/
 
 ### 🌐 4단계: 서버 실행
 ```bash
-# 개발 서버 실행 (새 포트)
+# 방법 1: 간편 스크립트 사용 (Windows)
+./start-dev.bat     # 개발용
+./start-prod.bat    # 프로덕션용
+
+# 방법 2: 수동 실행
+# 백엔드 서버 (환경변수 자동 로드)
 cd backend
 python -m uvicorn app.main:app --host 0.0.0.0 --port 32375 --reload
 
-# 또는 간편 스크립트 사용
-./start-dev.bat  # Windows
-./start-dev.sh   # Linux/Mac
+# 프론트엔드 서버 (별도 터미널)
+cd frontend
+npm run dev
 ```
 
 ### ✅ 5단계: 동작 확인
@@ -53,10 +68,11 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 32375 --reload
 
 ## 🔍 주요 기능
 
-### 📈 전력 수요 예측
-- 시간대별 전력 사용 패턴 분석
-- 계절성 및 외부 요인 반영
-- 95백분위수 기반 보수적 예측
+### 🔄 동적 패턴 분석 예측
+- **실제 데이터 기반 패턴 학습**: 정적 요인 대신 데이터에서 패턴 추출
+- **앙상블 예측 모델**: 8가지 통계/ML 모델 조합으로 정확도 향상
+- **충전소별 특화**: 각 충전소의 고유 사용 패턴 자동 반영
+- **신뢰도 기반 조정**: 데이터 품질에 따른 적응형 예측
 
 ### 💡 계약전력 추천
 - 데이터 기반 최적 계약전력 산출
@@ -126,6 +142,51 @@ power-demand-prediction-platform/
 ├── .env                  # 환경 변수
 ├── debug_tool.py        # 시스템 진단 도구
 └── docker-compose.yml   # 컨테이너 설정
+```
+
+## ⚙️ 환경 설정
+
+### 🔐 주요 환경변수
+
+시스템은 민감한 정보를 환경변수로 관리합니다:
+
+```bash
+# 서버 설정
+BACKEND_HOST=0.0.0.0
+BACKEND_PORT=32375
+FRONTEND_PORT=32376
+
+# 프로덕션 설정
+PRODUCTION_IP=220.69.200.55
+PRODUCTION_BACKEND_URL=http://220.69.200.55:32375
+PRODUCTION_FRONTEND_URL=http://220.69.200.55:32376
+
+# 보안 설정
+SECRET_KEY=your_secret_key_here_change_in_production
+
+# 성능 설정
+CACHE_TTL=300
+MAX_SESSIONS_PER_QUERY=10000
+UVICORN_WORKERS=4
+```
+
+### 📁 환경별 설정 파일
+
+- **`.env`**: 개발 환경 (기본값)
+- **`.env.production`**: 프로덕션 환경
+- **`frontend/.env`**: 프론트엔드 전용 설정
+
+### 🚀 환경별 실행
+
+```bash
+# 개발 환경
+./start-dev.bat
+
+# 프로덕션 환경 (환경변수 자동 적용)
+./start-prod.bat
+
+# Docker 환경 (환경변수 자동 로드)
+docker-compose up -d
 ```
 
 ## 🔧 API 엔드포인트

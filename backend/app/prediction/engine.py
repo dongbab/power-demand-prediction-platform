@@ -10,6 +10,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from functools import lru_cache
+from .dynamic_patterns import DynamicPatternAnalyzer, PatternFactors
 
 warnings.filterwarnings("ignore")
 
@@ -34,6 +35,8 @@ class EnsemblePrediction:
     weights: Dict[str, float]
     uncertainty: float
     visualization_data: Dict[str, Any]
+    pattern_factors: Optional[PatternFactors] = None  # Dynamic pattern information
+    method_comparison: Optional[Dict[str, Any]] = None  # Comparison between methods
 
 
 class PredictionEngine:
@@ -42,6 +45,11 @@ class PredictionEngine:
         self.max_contract_power = 100  # 최대 계약 전력 100kW
         self.max_workers = 4  # 병렬 처리 스레드 수
         self._stats_cache = {}  # 기본 통계량 캐시
+        self._pattern_cache = {}  # Pattern analysis cache
+        
+        # Dynamic pattern analyzer
+        self.pattern_analyzer = DynamicPatternAnalyzer()
+        
 
         # 충전기 타입별 최대 전력 제한
         self.charger_limits = {
@@ -70,13 +78,28 @@ class PredictionEngine:
             self._stats_cache[cache_key] = self._compute_base_statistics(power_data)
 
         base_stats = self._stats_cache[cache_key]
+        
+        # Dynamic pattern analysis (cached)
+        pattern_cache_key = f"{station_id}_{hash(str(data.index.tolist()))}"
+        if pattern_cache_key not in self._pattern_cache:
+            self._pattern_cache[pattern_cache_key] = self.pattern_analyzer.analyze_patterns(data, station_id)
+        
+        pattern_factors = self._pattern_cache[pattern_cache_key]
+        
 
-        # 병렬로 모델 실행
+        # Dynamic Pattern을 활용한 모델 실행
         model_predictions = []
+        
+        # Dynamic Pattern 기반 예측 추가
+        if pattern_factors and pattern_factors.confidence > 0.4:
+            pattern_prediction = self._dynamic_pattern_prediction(power_data, pattern_factors, base_stats)
+            if pattern_prediction:
+                model_predictions.append(pattern_prediction)
+                self.logger.info(f"Station {station_id}: Added dynamic pattern prediction (confidence: {pattern_factors.confidence:.2f})")
 
         try:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                # 모델 태스크 정의
+                # 모델 태스크 정의 - Dynamic Pattern 정보를 일부 모델에 전달
                 tasks = {
                     executor.submit(
                         self._extreme_value_models_optimized, power_data, base_stats
@@ -85,10 +108,11 @@ class PredictionEngine:
                         self._statistical_inference_models_optimized,
                         power_data,
                         base_stats,
+                        pattern_factors,  # Pattern 정보 전달
                     ): "STAT",
-                    executor.submit(self._time_series_models, data): "TS",
+                    executor.submit(self._time_series_models, data, pattern_factors): "TS",  # Pattern 정보 전달
                     executor.submit(
-                        self._machine_learning_models_optimized, power_data, base_stats
+                        self._machine_learning_models_optimized, power_data, base_stats, pattern_factors
                     ): "ML",
                 }
 
@@ -112,9 +136,9 @@ class PredictionEngine:
         if not model_predictions:
             return self._fallback_prediction(station_id)
 
-        # 앙상블 예측 수행
+        # 앙상블 예측 수행 (dynamic patterns 포함)
         result = self._ensemble_prediction(
-            model_predictions, power_data, station_id, charger_type
+            model_predictions, power_data, station_id, charger_type, pattern_factors
         )
 
         elapsed_time = time.time() - start_time
@@ -239,7 +263,7 @@ class PredictionEngine:
         return models
 
     def _statistical_inference_models_optimized(
-        self, power_data: np.ndarray, base_stats: Dict[str, float]
+        self, power_data: np.ndarray, base_stats: Dict[str, float], pattern_factors: Optional[PatternFactors] = None
     ) -> List[ModelPrediction]:
         models = []
 
@@ -277,7 +301,7 @@ class PredictionEngine:
 
         return models
 
-    def _time_series_models(self, data: pd.DataFrame) -> List[ModelPrediction]:
+    def _time_series_models(self, data: pd.DataFrame, pattern_factors: Optional[PatternFactors] = None) -> List[ModelPrediction]:
         models = []
 
         try:
@@ -295,15 +319,21 @@ class PredictionEngine:
                 )["순간최고전력"].max()
 
                 if len(monthly_max) >= 3:
-                    # 1. Exponential Smoothing
-                    exp_smooth_result = self._exponential_smoothing(monthly_max.values)
+                    # 1. Exponential Smoothing (Enhanced with patterns)
+                    exp_smooth_result = self._exponential_smoothing(monthly_max.values, pattern_factors)
                     if exp_smooth_result:
                         models.append(exp_smooth_result)
 
-                    # 2. Linear Trend Analysis
-                    trend_result = self._linear_trend_analysis(monthly_max.values)
+                    # 2. Linear Trend Analysis (Enhanced with patterns)
+                    trend_result = self._linear_trend_analysis(monthly_max.values, pattern_factors)
                     if trend_result:
                         models.append(trend_result)
+                        
+                    # 3. Pattern-Based Seasonal Adjustment
+                    if pattern_factors and pattern_factors.confidence > 0.6:
+                        seasonal_result = self._seasonal_pattern_prediction(monthly_max.values, pattern_factors)
+                        if seasonal_result:
+                            models.append(seasonal_result)
 
         except Exception as e:
             self.logger.warning(f"Time series models failed: {e}")
@@ -311,37 +341,52 @@ class PredictionEngine:
         return models
 
     def _machine_learning_models_optimized(
-        self, power_data: np.ndarray, base_stats: Dict[str, float]
+        self, power_data: np.ndarray, base_stats: Dict[str, float], pattern_factors: Optional[PatternFactors] = None
     ) -> List[ModelPrediction]:
         models = []
 
         try:
-            # 1. Ensemble Percentile Method (사전 계산된 값 사용)
+            # 1. Pattern-Enhanced Ensemble Percentile Method
             percentile_predictions = [
                 base_stats["q90"],
                 base_stats["q95"],
                 base_stats.get("q98", base_stats["q95"] * 1.02),  # 근사치
                 base_stats["q99"],
             ]
-
-            # 가중 평균 (높은 분위수에 더 많은 가중치)
+            
+            # Pattern 정보를 활용한 가중치 조정
             weights = np.array([0.1, 0.3, 0.4, 0.2])
+            if pattern_factors and pattern_factors.confidence > 0.6:
+                # 패턴 신뢰도가 높으면 95%, 98% 분위수에 더 집중
+                weights = np.array([0.05, 0.35, 0.45, 0.15])
+            
             weighted_prediction = np.average(percentile_predictions, weights=weights)
+            
+            # Pattern adjustment 적용
+            if pattern_factors and pattern_factors.confidence > 0.5:
+                weighted_prediction = self.pattern_analyzer.apply_pattern_adjustment(
+                    weighted_prediction, pattern_factors
+                )
+
+            confidence = 0.75
+            if pattern_factors:
+                confidence = min(0.85, 0.75 + pattern_factors.confidence * 0.1)
 
             models.append(
                 ModelPrediction(
-                    model_name="Weighted_Percentile_Ensemble",
+                    model_name="Pattern_Enhanced_Percentile_Ensemble",
                     predicted_value=weighted_prediction,
                     confidence_interval=(
                         base_stats.get("q85", base_stats["q90"] * 0.95),
                         base_stats["q99"],
                     ),
-                    confidence_score=0.75,
+                    confidence_score=confidence,
                     method_details={
-                        "method": "Optimized Weighted Percentile Ensemble",
+                        "method": "Pattern-Enhanced Percentile Ensemble",
                         "percentiles": [90, 95, 98, 99],
                         "weights": weights.tolist(),
-                        "description": "사전 계산된 분위수로 최적화된 예측",
+                        "pattern_applied": pattern_factors is not None,
+                        "description": "패턴 정보가 강화된 분위수 앙상블 예측",
                     },
                 )
             )
@@ -355,6 +400,168 @@ class PredictionEngine:
             self.logger.warning(f"Machine learning models failed: {e}")
 
         return models
+    
+    def _dynamic_pattern_prediction(self, power_data: np.ndarray, pattern_factors: PatternFactors, 
+                                   base_stats: Dict[str, float]) -> Optional[ModelPrediction]:
+        """
+        Generate prediction based on dynamic pattern analysis.
+        
+        This model uses learned patterns from actual data to make predictions,
+        making it more adaptive than static models.
+        """
+        try:
+            # Base prediction using 95th percentile
+            base_prediction = base_stats["q95"]
+            
+            # Apply pattern adjustments
+            adjusted_prediction = self.pattern_analyzer.apply_pattern_adjustment(
+                base_prediction, pattern_factors
+            )
+            
+            # Calculate confidence interval based on pattern quality
+            pattern_confidence = pattern_factors.confidence
+            spread = base_prediction * (0.1 + (1 - pattern_confidence) * 0.2)  # More uncertainty for lower confidence
+            
+            ci_lower = adjusted_prediction - spread
+            ci_upper = adjusted_prediction + spread
+            
+            # Enhanced confidence score based on multiple factors
+            model_confidence = min(0.95, pattern_confidence * 1.2)  # Boost confidence for high-quality patterns
+            
+            return ModelPrediction(
+                model_name="Dynamic_Pattern_Adaptive",
+                predicted_value=adjusted_prediction,
+                confidence_interval=(ci_lower, ci_upper),
+                confidence_score=model_confidence,
+                method_details={
+                    "method": "Dynamic Pattern Analysis",
+                    "base_prediction": base_prediction,
+                    "adjusted_prediction": adjusted_prediction,
+                    "pattern_confidence": pattern_confidence,
+                    "seasonal_applied": len(pattern_factors.seasonal_factors) > 0,
+                    "weekly_applied": len(pattern_factors.weekly_factors) > 0,
+                    "trend_applied": abs(pattern_factors.trend_factor - 1.0) > 0.05,
+                    "data_quality": pattern_factors.data_quality,
+                    "description": "실제 데이터 패턴을 학습하여 적응형 예측 수행",
+                },
+            )
+            
+        except Exception as e:
+            self.logger.warning(f"Dynamic pattern prediction failed: {e}")
+            return None
+    
+    def _pattern_enhanced_bayesian(self, power_data: np.ndarray, base_stats: Dict[str, float], 
+                                 pattern_factors: PatternFactors) -> Optional[ModelPrediction]:
+        """
+        Bayesian estimation enhanced with pattern information.
+        """
+        try:
+            n = len(power_data)
+            sample_mean = base_stats["mean"]
+            sample_std = base_stats["std"]
+            
+            # Use pattern factors to inform prior
+            if pattern_factors.trend_factor > 1.05:  # Increasing trend
+                prior_mean = sample_mean * pattern_factors.trend_factor
+            elif pattern_factors.trend_factor < 0.95:  # Decreasing trend
+                prior_mean = sample_mean * pattern_factors.trend_factor
+            else:
+                prior_mean = sample_mean
+            
+            # Pattern confidence affects prior strength
+            prior_strength = pattern_factors.confidence * 2.0  # Convert to effective sample size
+            prior_std = sample_std / np.sqrt(prior_strength)
+            
+            # Bayesian update
+            posterior_precision = 1 / (prior_std**2) + n / (sample_std**2)
+            posterior_var = 1 / posterior_precision
+            posterior_mean = (
+                prior_mean / (prior_std**2) + n * sample_mean / (sample_std**2)
+            ) * posterior_var
+            posterior_std = np.sqrt(posterior_var)
+            
+            # 95% quantile prediction
+            from scipy import stats
+            prediction = stats.norm.ppf(0.95, posterior_mean, posterior_std)
+            
+            # Apply final pattern adjustment
+            adjusted_prediction = self.pattern_analyzer.apply_pattern_adjustment(
+                prediction, pattern_factors
+            )
+            
+            # Confidence interval
+            ci_lower = stats.norm.ppf(0.05, posterior_mean, posterior_std)
+            ci_upper = stats.norm.ppf(0.99, posterior_mean, posterior_std)
+            
+            return ModelPrediction(
+                model_name="Pattern_Enhanced_Bayesian",
+                predicted_value=adjusted_prediction,
+                confidence_interval=(ci_lower, ci_upper),
+                confidence_score=min(0.90, 0.7 + pattern_factors.confidence * 0.2),
+                method_details={
+                    "method": "Pattern-Enhanced Bayesian",
+                    "prior_mean": prior_mean,
+                    "posterior_mean": posterior_mean,
+                    "pattern_confidence": pattern_factors.confidence,
+                    "trend_factor": pattern_factors.trend_factor,
+                    "description": "패턴 정보를 활용한 베이지안 추정",
+                },
+            )
+            
+        except Exception as e:
+            self.logger.warning(f"Pattern-enhanced Bayesian failed: {e}")
+            return None
+    
+    def _seasonal_pattern_prediction(self, monthly_data: np.ndarray, 
+                                   pattern_factors: PatternFactors) -> Optional[ModelPrediction]:
+        """
+        Pure seasonal pattern-based prediction using learned patterns.
+        """
+        try:
+            if not pattern_factors.seasonal_factors:
+                return None
+                
+            # 기본값으로 최근 데이터 평균 사용
+            base_value = np.mean(monthly_data[-3:]) if len(monthly_data) >= 3 else np.mean(monthly_data)
+            
+            # 다음 달의 계절 요인 적용
+            next_month = (datetime.now().month % 12) + 1
+            seasonal_factor = pattern_factors.seasonal_factors.get(next_month, 1.0)
+            
+            # 트렌드 적용
+            prediction = base_value * seasonal_factor * pattern_factors.trend_factor
+            
+            # 신뢰구간: 계절 변동성을 반영
+            seasonal_values = list(pattern_factors.seasonal_factors.values())
+            seasonal_std = np.std(seasonal_values)
+            
+            spread = base_value * seasonal_std * 0.5  # 계절 변동성 반영
+            ci_lower = prediction - spread
+            ci_upper = prediction + spread
+            
+            # 신뢰도: 패턴 품질과 계절성 일관성에 기반
+            seasonal_consistency = 1.0 - (seasonal_std / np.mean(seasonal_values))
+            confidence = min(0.88, pattern_factors.confidence * seasonal_consistency)
+            
+            return ModelPrediction(
+                model_name="Seasonal_Pattern_Prediction",
+                predicted_value=prediction,
+                confidence_interval=(ci_lower, ci_upper),
+                confidence_score=confidence,
+                method_details={
+                    "method": "Pure Seasonal Pattern Analysis",
+                    "base_value": base_value,
+                    "seasonal_factor": seasonal_factor,
+                    "trend_factor": pattern_factors.trend_factor,
+                    "target_month": next_month,
+                    "seasonal_consistency": seasonal_consistency,
+                    "description": f"학습된 계절 패턴을 활용한 {next_month}월 예측",
+                },
+            )
+            
+        except Exception as e:
+            self.logger.warning(f"Seasonal pattern prediction failed: {e}")
+            return None
 
     def _block_maxima_method(
         self, power_data: np.ndarray, block_size: int = 30
@@ -672,7 +879,7 @@ class PredictionEngine:
             return None
 
     def _exponential_smoothing(
-        self, monthly_data: np.ndarray
+        self, monthly_data: np.ndarray, pattern_factors: Optional[PatternFactors] = None
     ) -> Optional[ModelPrediction]:
         try:
             if len(monthly_data) < 3:
@@ -687,6 +894,20 @@ class PredictionEngine:
 
             # 다음 달 예측
             prediction = forecast
+            
+            # Pattern 정보를 활용한 예측 조정
+            if pattern_factors and pattern_factors.confidence > 0.5:
+                # Trend factor 적용
+                if abs(pattern_factors.trend_factor - 1.0) > 0.05:
+                    prediction *= pattern_factors.trend_factor
+                    
+                # 다음 달 계절 요인 적용
+                next_month = (datetime.now().month % 12) + 1
+                if next_month in pattern_factors.seasonal_factors:
+                    seasonal_adjustment = pattern_factors.seasonal_factors[next_month]
+                    # 계절 조정을 제한적으로 적용 (30%)
+                    seasonal_factor = 1.0 + (seasonal_adjustment - 1.0) * 0.3
+                    prediction *= seasonal_factor
 
             # 신뢰구간 (과거 오차 기반)
             errors = []
@@ -702,17 +923,24 @@ class PredictionEngine:
             else:
                 ci_lower = prediction * 0.9
                 ci_upper = prediction * 1.1
+                
+            # Pattern 정보로 신뢰도 조정
+            confidence = 0.70
+            if pattern_factors:
+                confidence = min(0.85, 0.70 + pattern_factors.confidence * 0.15)
 
             return ModelPrediction(
-                model_name="Exponential_Smoothing",
+                model_name="Pattern_Enhanced_Exponential_Smoothing",
                 predicted_value=prediction,
                 confidence_interval=(ci_lower, ci_upper),
-                confidence_score=0.70,
+                confidence_score=confidence,
                 method_details={
-                    "method": "Simple Exponential Smoothing",
+                    "method": "Pattern-Enhanced Exponential Smoothing",
                     "alpha": alpha,
                     "periods": len(monthly_data),
-                    "description": f"지수평활법 (α={alpha})을 사용한 시계열 예측",
+                    "pattern_applied": pattern_factors is not None,
+                    "trend_factor": pattern_factors.trend_factor if pattern_factors else 1.0,
+                    "description": f"패턴 정보가 강화된 지수평활법 (α={alpha})",
                 },
             )
 
@@ -721,7 +949,7 @@ class PredictionEngine:
             return None
 
     def _linear_trend_analysis(
-        self, monthly_data: np.ndarray
+        self, monthly_data: np.ndarray, pattern_factors: Optional[PatternFactors] = None
     ) -> Optional[ModelPrediction]:
         try:
             if len(monthly_data) < 3:
@@ -734,6 +962,21 @@ class PredictionEngine:
 
             # 다음 달 예측
             prediction = slope * len(monthly_data) + intercept
+            
+            # Pattern 정보를 활용한 예측 조정
+            if pattern_factors and pattern_factors.confidence > 0.5:
+                # Pattern에서 추출한 트렌드와 비교
+                if abs(pattern_factors.trend_factor - 1.0) > 0.05:
+                    pattern_trend_adjustment = pattern_factors.trend_factor
+                    # 두 트렌드 정보를 합성 (70% 선형, 30% 패턴)
+                    combined_trend = 0.7 * (1 + slope) + 0.3 * pattern_trend_adjustment
+                    prediction *= combined_trend
+                    
+                # 계절성 조정
+                next_month = (datetime.now().month % 12) + 1
+                if next_month in pattern_factors.seasonal_factors:
+                    seasonal_adjustment = pattern_factors.seasonal_factors[next_month]
+                    prediction *= seasonal_adjustment
 
             # R-squared 계산
             y_pred = slope * x + intercept
@@ -748,19 +991,27 @@ class PredictionEngine:
 
             ci_lower = prediction - 1.96 * rmse
             ci_upper = prediction + 1.96 * rmse
+            
+            # Pattern 정보로 신뢰도 향상
+            base_confidence = min(0.9, max(0.5, r_squared))
+            if pattern_factors and pattern_factors.confidence > 0.6:
+                confidence = min(0.92, base_confidence + pattern_factors.confidence * 0.1)
+            else:
+                confidence = base_confidence
 
             return ModelPrediction(
-                model_name="Linear_Trend",
+                model_name="Pattern_Enhanced_Linear_Trend",
                 predicted_value=prediction,
                 confidence_interval=(ci_lower, ci_upper),
-                confidence_score=min(0.9, max(0.5, r_squared)),
+                confidence_score=confidence,
                 method_details={
-                    "method": "Linear Trend Analysis",
+                    "method": "Pattern-Enhanced Linear Trend Analysis",
                     "slope": slope,
                     "intercept": intercept,
                     "r_squared": r_squared,
                     "rmse": rmse,
-                    "description": f"선형 추세 분석 (R²={r_squared:.3f})",
+                    "pattern_applied": pattern_factors is not None,
+                    "description": f"패턴 정보가 강화된 선형 추세 분석 (R²={r_squared:.3f})",
                 },
                 r_squared=r_squared,
                 rmse=rmse,
@@ -812,6 +1063,7 @@ class PredictionEngine:
         power_data: np.ndarray,
         station_id: str,
         charger_type: str = None,
+        pattern_factors: Optional[PatternFactors] = None,
     ) -> EnsemblePrediction:
         if not model_predictions:
             return self._fallback_prediction(station_id)
@@ -829,14 +1081,40 @@ class PredictionEngine:
             for pred in model_predictions
         )
 
-        # 원본 예측값 (제한 없음)
-        raw_prediction = max(1, weighted_sum)
+        # 원본 예측값 (제한 없음) - Dynamic Pattern 방식
+        dynamic_raw_prediction = max(1, weighted_sum)
+        
+        # Apply dynamic pattern adjustments
+        dynamic_final_prediction = dynamic_raw_prediction
+        if pattern_factors and pattern_factors.confidence > 0.5:
+            adjusted_prediction = self.pattern_analyzer.apply_pattern_adjustment(
+                dynamic_raw_prediction, pattern_factors
+            )
+            self.logger.info(f"Station {station_id}: Applied dynamic patterns - "
+                           f"Original: {dynamic_raw_prediction:.1f}kW, Adjusted: {adjusted_prediction:.1f}kW "
+                           f"(confidence: {pattern_factors.confidence:.2f})")
+            dynamic_final_prediction = adjusted_prediction
 
         # 충전기 타입별 최대 전력 제한 적용
         max_power = self.charger_limits.get(charger_type, 100) if charger_type else 100
 
-        # 제한된 최종 예측값
-        final_prediction = min(max_power, max(1, round(weighted_sum)))
+        # Dynamic Pattern 최종 예측값
+        dynamic_prediction = min(max_power, max(1, round(dynamic_final_prediction)))
+
+
+        # 메소드 비교 정보 생성
+        method_comparison = {
+            "dynamic_patterns": {
+                "predicted_value": dynamic_prediction,
+                "raw_prediction": dynamic_raw_prediction,
+                "confidence": pattern_factors.confidence if pattern_factors else 0.3,
+                "method": "weighted_confidence_with_dynamic_patterns",
+                "applied_adjustments": pattern_factors is not None and pattern_factors.confidence > 0.5
+            },
+        }
+
+        # 기본값은 Dynamic Pattern 결과 사용
+        final_prediction = dynamic_prediction
 
         # 불확실성 계산 (예측값들의 표준편차)
         predictions_array = np.array(
@@ -846,17 +1124,19 @@ class PredictionEngine:
 
         # 시각화 데이터 준비
         viz_data = self._prepare_visualization_data(
-            model_predictions, power_data, final_prediction, raw_prediction
+            model_predictions, power_data, final_prediction, dynamic_raw_prediction
         )
 
         return EnsemblePrediction(
             final_prediction=final_prediction,
-            raw_prediction=raw_prediction,
+            raw_prediction=dynamic_raw_prediction,
             model_predictions=model_predictions,
-            ensemble_method="weighted_confidence",
+            ensemble_method="weighted_confidence_with_dynamic_patterns",
             weights=weights,
             uncertainty=uncertainty,
             visualization_data=viz_data,
+            pattern_factors=pattern_factors,
+            method_comparison=method_comparison,
         )
 
     def _prepare_visualization_data(
@@ -916,6 +1196,254 @@ class PredictionEngine:
             else final_prediction,
             "data_size": len(power_data),
         }
+
+    def predict_energy_demand(self, data: pd.DataFrame, station_id: str, days: int = 90) -> Dict[str, Any]:
+        """
+        전력 수요(에너지) 예측 함수
+        """
+        try:
+            if data.empty:
+                return {
+                    "success": False,
+                    "message": "에너지 데이터가 없습니다.",
+                    "station_id": station_id,
+                }
+
+            # 에너지 컬럼 찾기 (실제 CSV 컬럼명에 맞춰 수정)
+            energy_cols = [
+                col
+                for col in data.columns
+                if any(
+                    keyword in col.lower()
+                    for keyword in ["에너지", "energy", "kwh", "충전량", "kwh"]
+                )
+            ]
+            
+            # 디버깅: 컬럼명 출력
+            self.logger.info(f"Station {station_id} - Available columns: {list(data.columns)}")
+            self.logger.info(f"Station {station_id} - Found energy columns: {energy_cols}")
+
+            if not energy_cols:
+                return {
+                    "success": False,
+                    "message": "에너지 데이터 컬럼을 찾을 수 없습니다.",
+                    "station_id": station_id,
+                }
+
+            energy_col = energy_cols[0]
+
+            # 날짜 컬럼 찾기
+            date_cols = [
+                col
+                for col in data.columns
+                if any(
+                    keyword in col.lower()
+                    for keyword in ["일시", "date", "time", "시작", "종료"]
+                )
+            ]
+
+            if not date_cols:
+                return {
+                    "success": False,
+                    "message": "날짜 컬럼을 찾을 수 없습니다.",
+                    "station_id": station_id,
+                }
+
+            date_col = date_cols[0]
+
+            # 데이터 정리
+            df_clean = data[[date_col, energy_col]].copy()
+            df_clean = df_clean.dropna()
+            df_clean[date_col] = pd.to_datetime(df_clean[date_col], errors="coerce")
+            df_clean[energy_col] = pd.to_numeric(df_clean[energy_col], errors="coerce")
+            df_clean = df_clean.dropna()
+
+            if df_clean.empty:
+                return {
+                    "success": False,
+                    "message": "유효한 에너지 데이터가 없습니다.",
+                    "station_id": station_id,
+                }
+
+            # 일별 에너지 소비량 집계
+            df_clean["date"] = df_clean[date_col].dt.date
+            daily_energy = df_clean.groupby("date")[energy_col].sum().reset_index()
+            daily_energy["date"] = pd.to_datetime(daily_energy["date"])
+
+            # 실제 데이터와 예측 데이터 생성
+            result = self._generate_energy_forecast(daily_energy, energy_col, station_id)
+            result["station_id"] = station_id
+            
+            return result
+
+        except Exception as e:
+            self.logger.error(
+                f"Error getting energy demand forecast for {station_id}: {e}",
+                exc_info=True,
+            )
+            return {"success": False, "error": str(e), "station_id": station_id}
+    
+    def _generate_energy_forecast(
+        self, daily_energy: pd.DataFrame, energy_col: str, station_id: str
+    ) -> Dict[str, Any]:
+        # 기본 통계
+        energy_stats = {
+            "total_energy": float(daily_energy[energy_col].sum()),
+            "avg_daily": float(daily_energy[energy_col].mean()),
+            "min_daily": float(daily_energy[energy_col].min()),
+            "max_daily": float(daily_energy[energy_col].max()),
+            "std_daily": float(daily_energy[energy_col].std()),
+        }
+
+        # 시계열 데이터 생성 (실제 데이터)
+        actual_data = []
+        for _, row in daily_energy.iterrows():
+            actual_data.append(
+                {
+                    "date": row["date"].strftime("%Y-%m-%d"),
+                    "energy": round(float(row[energy_col]), 2),
+                    "type": "actual",
+                }
+            )
+
+        # 예측 데이터 생성 (향후 30일)
+        last_date = daily_energy["date"].max()
+        avg_energy = daily_energy[energy_col].mean()
+        std_energy = daily_energy[energy_col].std()
+
+        # 계절성 및 트렌드 고려한 간단한 예측
+        predicted_data = []
+        for i in range(1, 31):  # 30일 예측
+            future_date = last_date + pd.Timedelta(days=i)
+
+            # 계절성 패턴 (월별)
+            month = future_date.month
+            seasonal_factor = 1.0 + 0.1 * np.sin(2 * np.pi * (month - 1) / 12)
+
+            # 주간 패턴 (주말 vs 주중)
+            weekday = future_date.weekday()
+            weekly_factor = 0.8 if weekday >= 5 else 1.0  # 주말은 80%
+
+            # 노이즈 추가
+            noise_factor = 1.0 + np.random.normal(0, 0.1)
+
+            predicted_energy = (
+                avg_energy * seasonal_factor * weekly_factor * noise_factor
+            )
+            predicted_energy = max(0, predicted_energy)  # 음수 방지
+
+            predicted_data.append(
+                {
+                    "date": future_date.strftime("%Y-%m-%d"),
+                    "energy": round(predicted_energy, 2),
+                    "type": "predicted",
+                }
+            )
+
+        # 월별 집계 (실제 + 예측)
+        monthly_summary = self._generate_monthly_energy_summary(
+            daily_energy, energy_col
+        )
+
+        # 성장률 계산
+        if len(daily_energy) >= 30:
+            recent_avg = daily_energy[energy_col].tail(30).mean()
+            older_avg = (
+                daily_energy[energy_col].head(30).mean()
+                if len(daily_energy) >= 60
+                else recent_avg
+            )
+            growth_rate = (
+                ((recent_avg - older_avg) / older_avg * 100) if older_avg > 0 else 0
+            )
+        else:
+            growth_rate = 0
+
+        return {
+            "success": True,
+            "energy_statistics": energy_stats,
+            "timeseries_data": actual_data + predicted_data,
+            "actual_data": actual_data,
+            "predicted_data": predicted_data,
+            "monthly_summary": monthly_summary,
+            "growth_rate": round(growth_rate, 1),
+            "data_range": {
+                "start_date": daily_energy["date"].min().strftime("%Y-%m-%d"),
+                "end_date": daily_energy["date"].max().strftime("%Y-%m-%d"),
+                "prediction_start": predicted_data[0]["date"]
+                if predicted_data
+                else None,
+                "prediction_end": predicted_data[-1]["date"]
+                if predicted_data
+                else None,
+            },
+            "insights": self._generate_energy_insights(energy_stats, growth_rate),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    def _generate_monthly_energy_summary(
+        self, daily_energy: pd.DataFrame, energy_col: str
+    ) -> List[Dict[str, Any]]:
+        daily_energy["year_month"] = daily_energy["date"].dt.to_period("M")
+        monthly_data = (
+            daily_energy.groupby("year_month")[energy_col]
+            .agg(["sum", "mean", "count"])
+            .reset_index()
+        )
+
+        monthly_summary = []
+        for _, row in monthly_data.iterrows():
+            period = row["year_month"]
+            monthly_summary.append(
+                {
+                    "month": f"{period.year}-{period.month:02d}",
+                    "month_label": f"{period.year}.{period.month:02d}",
+                    "total_energy": round(float(row["sum"]), 2),
+                    "avg_daily": round(float(row["mean"]), 2),
+                    "active_days": int(row["count"]),
+                }
+            )
+
+        return monthly_summary
+
+    def _generate_energy_insights(
+        self, stats: Dict[str, Any], growth_rate: float
+    ) -> List[str]:
+        insights = []
+
+        # 일평균 소비량 분석
+        avg_daily = stats["avg_daily"]
+        if avg_daily > 50:
+            insights.append(
+                f"일평균 {avg_daily:.1f}kWh로 높은 에너지 소비량을 보입니다"
+            )
+        elif avg_daily > 20:
+            insights.append(
+                f"일평균 {avg_daily:.1f}kWh로 보통 수준의 에너지 소비량을 보입니다"
+            )
+        else:
+            insights.append(
+                f"일평균 {avg_daily:.1f}kWh로 낮은 에너지 소비량을 보입니다"
+            )
+
+        # 변동성 분석
+        cv = stats["std_daily"] / stats["avg_daily"] if stats["avg_daily"] > 0 else 0
+        if cv > 0.5:
+            insights.append("에너지 소비 패턴이 불규칙합니다")
+        elif cv > 0.3:
+            insights.append("에너지 소비 패턴이 보통 수준의 변동성을 보입니다")
+        else:
+            insights.append("에너지 소비 패턴이 안정적입니다")
+
+        # 성장률 분석
+        if growth_rate > 10:
+            insights.append(f"에너지 소비가 {growth_rate:.1f}% 증가 추세입니다")
+        elif growth_rate < -10:
+            insights.append(f"에너지 소비가 {abs(growth_rate):.1f}% 감소 추세입니다")
+        else:
+            insights.append("에너지 소비가 안정적인 추세를 보입니다")
+
+        return insights
 
     def _fallback_prediction(self, station_id: str) -> EnsemblePrediction:
         fallback_pred = ModelPrediction(

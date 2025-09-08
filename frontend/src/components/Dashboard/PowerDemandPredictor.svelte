@@ -496,25 +496,25 @@
 
     <div class="metrics-row">
         <MetricCard
-            title="일평균 에너지"
+            title="일평균 소비 전력량"
             value={averageDailyEnergy}
             unit="kWh"
             type="energy"
-            tooltip="선택된 기간 동안의 일일 평균 에너지 소비량"
+            tooltip="선택된 기간 동안의 일일 평균 소비 전력량"
         />
         <MetricCard
-            title="총 에너지"
+            title="총 소비 전력량"
             value={totalEnergy}
             unit="kWh"
             type="total"
-            tooltip="선택된 기간 동안의 총 에너지 소비량"
+            tooltip="선택된 기간 동안의 총 소비 전력량"
         />
         <MetricCard
             title="증가율"
             value={growthRate}
             unit="%"
             type="growth"
-            tooltip="전 기간 대비 에너지 소비 증가율"
+            tooltip="전 기간 대비 소비 전력량 증가율"
         />
         <MetricCard
             title="예상 {forecastPeriods.find(p => p.value === energyForecastPeriod)?.label || '일간'} 전력량 수요"

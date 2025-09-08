@@ -36,6 +36,7 @@ frontend/dist/
 frontend/package-lock.json.bak
 frontend/*.tsbuildinfo
 frontend/vite.config.js.timestamp-*
+static/_app
 
 # Virtual Environment
 env/
@@ -103,3 +104,4 @@ dmypy.json
 
 # Windows
 desktop.ini
+

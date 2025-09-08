@@ -726,8 +726,25 @@ class StationService:
             # 예측값이 제한을 넘는지 확인
             prediction_exceeds_limit = algorithm_prediction > recommended_contract_kw
 
+            # Extract pattern information from ensemble result
+            pattern_info = {}
+            if ensemble_result.pattern_factors:
+                pattern_info = {
+                    "pattern_confidence": ensemble_result.pattern_factors.confidence,
+                    "data_quality": ensemble_result.pattern_factors.data_quality,
+                    "seasonal_strength": ensemble_result.pattern_factors.calculation_metadata.get("pattern_strength", {}).get("seasonal_strength", 0.0),
+                    "weekly_strength": ensemble_result.pattern_factors.calculation_metadata.get("pattern_strength", {}).get("weekly_strength", 0.0),
+                    "trend_factor": ensemble_result.pattern_factors.trend_factor,
+                    "analysis_method": "dynamic_pattern_analysis"
+                }
+            else:
+                pattern_info = {
+                    "analysis_method": "fallback_static_patterns",
+                    "pattern_confidence": 0.3
+                }
+
             self.logger.info(
-                f"Advanced prediction for {station_id}: algorithm={algorithm_prediction}kW, contract={recommended_contract_kw}kW, capped={prediction_exceeds_limit}"
+                f"Advanced prediction for {station_id}: algorithm={algorithm_prediction}kW, contract={recommended_contract_kw}kW, capped={prediction_exceeds_limit}, pattern_confidence={pattern_info.get('pattern_confidence', 0):.2f}"
             )
 
             # 신뢰도 계산 (불확실성 기반)
@@ -821,10 +838,33 @@ class StationService:
             if hasattr(data_end_date, "isoformat")
             else str(data_end_date),
             "record_count": power_stats.get("count", 0),
+            # Dynamic pattern information
+            "pattern_analysis": pattern_info if "pattern_info" in locals() else {"analysis_method": "fallback", "pattern_confidence": 0.3},
         }
 
         # 고급 모델 결과가 있으면 추가 정보 포함
         if ensemble_result:
+            # SARIMA 데이터 확인 및 생성
+            sarima_data = None
+            method_comparison_data = None
+            
+            if hasattr(ensemble_result, 'sarima_result') and ensemble_result.sarima_result:
+                sarima_result = ensemble_result.sarima_result
+                sarima_data = {
+                    "predicted_value": sarima_result.predicted_value if sarima_result.success else None,
+                    "confidence": sarima_result.confidence_score if sarima_result.success else 0.0,
+                    "success": sarima_result.success,
+                    "error_message": sarima_result.error_message if not sarima_result.success else None,
+                    "forecast_data": sarima_result.forecast_data if sarima_result.success else []
+                }
+                self.logger.info(f"Station {station_id}: SARIMA data prepared - success: {sarima_result.success}, forecast_data_count: {len(sarima_result.forecast_data) if sarima_result.success else 0}")
+            else:
+                self.logger.warning(f"Station {station_id}: No SARIMA result available")
+            
+            if hasattr(ensemble_result, 'method_comparison') and ensemble_result.method_comparison:
+                method_comparison_data = ensemble_result.method_comparison
+                self.logger.info(f"Station {station_id}: Method comparison data available")
+
             result.update(
                 {
                     "advanced_model_prediction": {
@@ -847,6 +887,10 @@ class StationService:
                             for pred in ensemble_result.model_predictions
                         ],
                     },
+                    # Method comparison for visualization
+                    "method_comparison": method_comparison_data,
+                    # SARIMA prediction results
+                    "sarima_prediction": sarima_data,
                     "charger_type": charger_type,  # 충전기 타입 정보 추가
                     "charger_max_power": max_contract_advanced
                     if "max_contract_advanced" in locals()
@@ -1133,6 +1177,8 @@ class StationService:
             return cached_result
 
         try:
+            from ..prediction.engine import PredictionEngine
+            
             loader = ChargingDataLoader(station_id)
             df = loader.load_historical_sessions(days=days)
 
@@ -1143,72 +1189,11 @@ class StationService:
                     "station_id": station_id,
                 }
 
-            # 에너지 컬럼 찾기 (실제 CSV 컬럼명에 맞춰 수정)
-            energy_cols = [
-                col
-                for col in df.columns
-                if any(
-                    keyword in col.lower()
-                    for keyword in ["에너지", "energy", "kwh", "충전량", "kWh"]
-                )
-            ]
+            # PredictionEngine을 사용하여 에너지 예측 수행
+            prediction_engine = PredictionEngine()
+            result = prediction_engine.predict_energy_demand(df, station_id, days)
             
-            # 디버깅: 컬럼명 출력
-            self.logger.info(f"Station {station_id} - Available columns: {list(df.columns)}")
-            self.logger.info(f"Station {station_id} - Found energy columns: {energy_cols}")
-
-            if not energy_cols:
-                return {
-                    "success": False,
-                    "message": "에너지 데이터 컬럼을 찾을 수 없습니다.",
-                    "station_id": station_id,
-                }
-
-            energy_col = energy_cols[0]
-
-            # 날짜 컬럼 찾기
-            date_cols = [
-                col
-                for col in df.columns
-                if any(
-                    keyword in col.lower()
-                    for keyword in ["일시", "date", "time", "시작", "종료"]
-                )
-            ]
-
-            if not date_cols:
-                return {
-                    "success": False,
-                    "message": "날짜 컬럼을 찾을 수 없습니다.",
-                    "station_id": station_id,
-                }
-
-            date_col = date_cols[0]
-
-            # 데이터 정리
-            df_clean = df[[date_col, energy_col]].copy()
-            df_clean = df_clean.dropna()
-            df_clean[date_col] = pd.to_datetime(df_clean[date_col], errors="coerce")
-            df_clean[energy_col] = pd.to_numeric(df_clean[energy_col], errors="coerce")
-            df_clean = df_clean.dropna()
-
-            if df_clean.empty:
-                return {
-                    "success": False,
-                    "message": "유효한 에너지 데이터가 없습니다.",
-                    "station_id": station_id,
-                }
-
-            # 일별 에너지 소비량 집계
-            df_clean["date"] = df_clean[date_col].dt.date
-            daily_energy = df_clean.groupby("date")[energy_col].sum().reset_index()
-            daily_energy["date"] = pd.to_datetime(daily_energy["date"])
-
-            # 실제 데이터와 예측 데이터 생성
-            result = self._generate_energy_forecast(
-                daily_energy, energy_col, station_id
-            )
-            result["station_id"] = station_id
+            # station_name 추가
             result["station_name"] = self._get_station_name_by_id(station_id)
 
             self._set_cache(cache_key, result)
@@ -1221,169 +1206,8 @@ class StationService:
             )
             return {"success": False, "error": str(e), "station_id": station_id}
 
-    def _generate_energy_forecast(
-        self, daily_energy: pd.DataFrame, energy_col: str, station_id: str
-    ) -> Dict[str, Any]:
-        # 기본 통계
-        energy_stats = {
-            "total_energy": float(daily_energy[energy_col].sum()),
-            "avg_daily": float(daily_energy[energy_col].mean()),
-            "min_daily": float(daily_energy[energy_col].min()),
-            "max_daily": float(daily_energy[energy_col].max()),
-            "std_daily": float(daily_energy[energy_col].std()),
-        }
 
-        # 시계열 데이터 생성 (실제 데이터)
-        actual_data = []
-        for _, row in daily_energy.iterrows():
-            actual_data.append(
-                {
-                    "date": row["date"].strftime("%Y-%m-%d"),
-                    "energy": round(float(row[energy_col]), 2),
-                    "type": "actual",
-                }
-            )
 
-        # 예측 데이터 생성 (향후 30일)
-        last_date = daily_energy["date"].max()
-        avg_energy = daily_energy[energy_col].mean()
-        std_energy = daily_energy[energy_col].std()
-
-        # 계절성 및 트렌드 고려한 간단한 예측
-        predicted_data = []
-        for i in range(1, 31):  # 30일 예측
-            future_date = last_date + pd.Timedelta(days=i)
-
-            # 계절성 패턴 (월별)
-            month = future_date.month
-            seasonal_factor = 1.0 + 0.1 * np.sin(2 * np.pi * (month - 1) / 12)
-
-            # 주간 패턴 (주말 vs 주중)
-            weekday = future_date.weekday()
-            weekly_factor = 0.8 if weekday >= 5 else 1.0  # 주말은 80%
-
-            # 노이즈 추가
-            noise_factor = 1.0 + np.random.normal(0, 0.1)
-
-            predicted_energy = (
-                avg_energy * seasonal_factor * weekly_factor * noise_factor
-            )
-            predicted_energy = max(0, predicted_energy)  # 음수 방지
-
-            predicted_data.append(
-                {
-                    "date": future_date.strftime("%Y-%m-%d"),
-                    "energy": round(predicted_energy, 2),
-                    "type": "predicted",
-                }
-            )
-
-        # 월별 집계 (실제 + 예측)
-        monthly_summary = self._generate_monthly_energy_summary(
-            daily_energy, energy_col
-        )
-
-        # 성장률 계산
-        if len(daily_energy) >= 30:
-            recent_avg = daily_energy[energy_col].tail(30).mean()
-            older_avg = (
-                daily_energy[energy_col].head(30).mean()
-                if len(daily_energy) >= 60
-                else recent_avg
-            )
-            growth_rate = (
-                ((recent_avg - older_avg) / older_avg * 100) if older_avg > 0 else 0
-            )
-        else:
-            growth_rate = 0
-
-        return self._clean_for_json(
-            {
-                "success": True,
-                "energy_statistics": energy_stats,
-                "timeseries_data": actual_data + predicted_data,
-                "actual_data": actual_data,
-                "predicted_data": predicted_data,
-                "monthly_summary": monthly_summary,
-                "growth_rate": round(growth_rate, 1),
-                "data_range": {
-                    "start_date": daily_energy["date"].min().strftime("%Y-%m-%d"),
-                    "end_date": daily_energy["date"].max().strftime("%Y-%m-%d"),
-                    "prediction_start": predicted_data[0]["date"]
-                    if predicted_data
-                    else None,
-                    "prediction_end": predicted_data[-1]["date"]
-                    if predicted_data
-                    else None,
-                },
-                "insights": self._generate_energy_insights(energy_stats, growth_rate),
-                "timestamp": datetime.now().isoformat(),
-            }
-        )
-
-    def _generate_monthly_energy_summary(
-        self, daily_energy: pd.DataFrame, energy_col: str
-    ) -> List[Dict[str, Any]]:
-        daily_energy["year_month"] = daily_energy["date"].dt.to_period("M")
-        monthly_data = (
-            daily_energy.groupby("year_month")[energy_col]
-            .agg(["sum", "mean", "count"])
-            .reset_index()
-        )
-
-        monthly_summary = []
-        for _, row in monthly_data.iterrows():
-            period = row["year_month"]
-            monthly_summary.append(
-                {
-                    "month": f"{period.year}-{period.month:02d}",
-                    "month_label": f"{period.year}.{period.month:02d}",
-                    "total_energy": round(float(row["sum"]), 2),
-                    "avg_daily": round(float(row["mean"]), 2),
-                    "active_days": int(row["count"]),
-                }
-            )
-
-        return monthly_summary
-
-    def _generate_energy_insights(
-        self, stats: Dict[str, Any], growth_rate: float
-    ) -> List[str]:
-        insights = []
-
-        # 일평균 소비량 분석
-        avg_daily = stats["avg_daily"]
-        if avg_daily > 50:
-            insights.append(
-                f"일평균 {avg_daily:.1f}kWh로 높은 에너지 소비량을 보입니다"
-            )
-        elif avg_daily > 20:
-            insights.append(
-                f"일평균 {avg_daily:.1f}kWh로 보통 수준의 에너지 소비량을 보입니다"
-            )
-        else:
-            insights.append(
-                f"일평균 {avg_daily:.1f}kWh로 낮은 에너지 소비량을 보입니다"
-            )
-
-        # 변동성 분석
-        cv = stats["std_daily"] / stats["avg_daily"] if stats["avg_daily"] > 0 else 0
-        if cv > 0.5:
-            insights.append("에너지 소비 패턴이 불규칙합니다")
-        elif cv > 0.3:
-            insights.append("에너지 소비 패턴이 보통 수준의 변동성을 보입니다")
-        else:
-            insights.append("에너지 소비 패턴이 안정적입니다")
-
-        # 성장률 분석
-        if growth_rate > 10:
-            insights.append(f"에너지 소비가 {growth_rate:.1f}% 증가 추세입니다")
-        elif growth_rate < -10:
-            insights.append(f"에너지 소비가 {abs(growth_rate):.1f}% 감소 추세입니다")
-        else:
-            insights.append("에너지 소비가 안정적인 추세를 보입니다")
-
-        return insights
 
     def clear_cache(self, station_id: str = None) -> Dict[str, Any]:
         if station_id:

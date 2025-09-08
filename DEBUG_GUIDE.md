@@ -65,13 +65,6 @@ python debug_consolidated.py --test multiple --stations BNS0061 BNS0514 BNS0819
 - `debug_multiple_stations.py` → `--test multiple`
 - `test_station_service.py` → `--test api`
 
-## 장점
-
-1. **일관된 인터페이스**: 모든 디버그 기능을 하나의 도구로 통합
-2. **중복 제거**: 동일한 로직의 반복을 제거
-3. **확장성**: 새로운 테스트 추가가 용이
-4. **유지보수성**: 코드 관리가 단순화
-
 ## 예시 출력
 
 ```bash
