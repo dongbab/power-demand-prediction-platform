@@ -1,6 +1,6 @@
 {
-  "name": "charging-station-frontend",
-  "version": "0.0.1",
+  "name": "power-demand-prediction-frontend",
+  "version": "0.0.4",
   "private": true,
   "scripts": {
     "build": "vite build",

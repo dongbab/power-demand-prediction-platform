@@ -27,7 +27,6 @@ class ChargingDataLoader:
                 self.data_dir = repo_dir
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        print(f"데이터 디렉토리: {self.data_dir.absolute()}")
 
     def _is_marker(self, p: Path) -> bool:
         return p.name in MARKER_CANDIDATES
@@ -77,7 +76,6 @@ class ChargingDataLoader:
             files = [f for f in files if not self._is_marker(f)]
             csv_files.extend(files)
             if files:
-                print(f"패턴 '{pattern}'으로 발견된 파일: {len(files)}개")
                 break
 
         csv_files = list(set(csv_files))
@@ -86,12 +84,7 @@ class ChargingDataLoader:
         except Exception:
             pass
 
-        if csv_files:
-            print("발견된 CSV 파일들:")
-            for i, file in enumerate(csv_files):
-                file_size = file.stat().st_size / (1024 * 1024)
-                print(f"  {i + 1}. {file.name} ({file_size:.1f}MB)")
-        else:
+        if not csv_files:
             print(f"CSV 파일을 찾을 수 없습니다. 검색 경로: {self.data_dir}")
 
         return csv_files
@@ -104,7 +97,6 @@ class ChargingDataLoader:
             if not csv_file:
                 print("로드할 CSV 파일이 없습니다.")
                 return pd.DataFrame()
-            print(f"자동 선택된 최신/활성 파일: {csv_file.name}")
 
         # data/raw 내부 강제
         csv_file = (self.data_dir / Path(csv_file).name).resolve()
@@ -118,18 +110,15 @@ class ChargingDataLoader:
             print(f"⚠️ 대용량 파일 ({file_size_mb:.1f}MB) - 샘플링 모드로 로드")
             max_rows = max_rows or 50000  # 5만개 행 제한
 
-        print(f"CSV 파일 로딩 시작: {csv_file.name}")
 
         # 다양한 인코딩 시도
         encodings = [encoding, "utf-8", "euc-kr", "cp949", "utf-8-sig"]
 
         for enc in encodings:
             try:
-                print(f"인코딩 '{enc}' 시도 중...")
 
                 # 먼저 샘플로 테스트
                 sample_df = pd.read_csv(csv_file, nrows=5, encoding=enc)
-                print(f"  샘플 로드 성공 - 컬럼 수: {len(sample_df.columns)}")
 
                 # 전체 데이터 로드 (메모리 효율성을 위해 청크 읽기)
                 if max_rows and file_size_mb > 100:
@@ -143,14 +132,11 @@ class ChargingDataLoader:
                 else:
                     df = pd.read_csv(csv_file, dtype=str, low_memory=True, encoding=enc, nrows=max_rows)
 
-                print(f"  전체 로드 성공: {len(df):,}개 행, {len(df.columns)}개 컬럼")
                 return df
 
             except UnicodeDecodeError:
-                print(f"  인코딩 '{enc}' 실패")
                 continue
             except Exception as e:
-                print(f"  인코딩 '{enc}'에서 오류 발생: {e}")
                 continue
 
         print("모든 인코딩 시도 실패")
@@ -203,7 +189,7 @@ class ChargingDataLoader:
 
             # 날짜 필터링
             df = self._filter_by_days(df, days)
-            print(f"최종 데이터: {len(df):,}개 세션")
+            print(f"데이터 로드 완료: {len(df):,}개 세션")
 
             return df
 
@@ -295,23 +281,15 @@ class ChargingDataLoader:
     # 기존 메서드들은 그대로 유지 (_normalize_column_names, _convert_data_types, etc.)
     def _normalize_column_names(self, df: pd.DataFrame) -> pd.DataFrame:
         
-        print("컬럼명 정규화 중...")
 
         # 컬럼명 공백 제거 및 정리
         df.columns = df.columns.str.strip()
 
-        # 원본 컬럼명 출력 (처음 20개만)
-        print(f"컬럼명 ({len(df.columns)}개):")
-        for i, col in enumerate(df.columns[:20]):
-            print(f"  {i:2d}: '{col}'")
-        if len(df.columns) > 20:
-            print(f"  ... (총 {len(df.columns)}개)")
 
         return df
 
     def _convert_data_types(self, df: pd.DataFrame) -> pd.DataFrame:
         
-        print("데이터 타입 변환 중...")
 
         # 날짜 컬럼 찾기 및 변환
         date_patterns = ["일시", "date", "time", "시간"]
@@ -354,7 +332,6 @@ class ChargingDataLoader:
                     df[col] = pd.to_datetime(df[col], errors="coerce")
 
                 valid_dates = df[col].notna().sum()
-                print(f"  {col}: {valid_dates:,}개 유효한 날짜")
             except Exception as e:
                 print(f"  {col} 날짜 변환 실패: {e}")
 
@@ -369,13 +346,6 @@ class ChargingDataLoader:
                 df[col] = df[col].str.replace(" ", "", regex=False)  # 공백 제거
                 df[col] = pd.to_numeric(df[col], errors="coerce")
                 valid_numbers = df[col].notna().sum()
-                print(f"  {col}: {valid_numbers:,}개 유효한 숫자")
-                
-                # 전력 데이터 범위 확인
-                if "전력" in col:
-                    power_data = df[col].dropna()
-                    if not power_data.empty:
-                        print(f"    전력 범위: {power_data.min():.1f} ~ {power_data.max():.1f}kW (평균: {power_data.mean():.1f}kW)")
                         
             except Exception as e:
                 print(f"  {col} 숫자 변환 실패: {e}")
@@ -400,7 +370,6 @@ class ChargingDataLoader:
             cutoff_date = datetime.now() - timedelta(days=days)
             original_count = len(df)
             df = df[df[date_col] >= cutoff_date]
-            print(f"날짜 필터링: {original_count:,} → {len(df):,}개 ({cutoff_date.date()} 이후)")
             return df
         except Exception as e:
             print(f"날짜 필터링 중 오류: {e}")
@@ -408,7 +377,6 @@ class ChargingDataLoader:
 
     def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
         
-        print("데이터 정제 중...")
         original_size = len(df)
 
         # 전력 컬럼 찾기
@@ -418,11 +386,8 @@ class ChargingDataLoader:
             before = len(df)
             df = df[(df[power_col] > 0) & (df[power_col] < 1000)]
             removed = before - len(df)
-            if removed > 0:
-                print(f"  {power_col} 이상치 제거: {removed:,}개 행")
 
         retention_rate = (len(df) / original_size * 100) if original_size > 0 else 0
-        print(f"데이터 정제 완료: {original_size:,} → {len(df):,}개 ({retention_rate:.1f}% 보존)")
         return df
 
     # 기존 다른 메서드들도 그대로 유지...
