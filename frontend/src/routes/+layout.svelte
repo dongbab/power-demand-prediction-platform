@@ -3,6 +3,7 @@
 	import { notifications } from '../stores/uiStore.ts';
 	import AlertMessage from '../components/AlertMessage.svelte';
 	import '../app.css';
+	import '../styles/shared.css';
 </script>
 
 
@@ -20,56 +21,10 @@
 {/if}
 
 <style>
-	:global(html) {
-		--bg-primary: #f2f2f2;
-		--bg-secondary: #ffffff;
-		--bg-tertiary: #f8f9fa;
-		--text-primary: #2E56A6;
-		--text-secondary: #416CA6;
-		--text-muted: #7A91BF;
-		--border-color: #e0e0e0;
-		--shadow: rgba(46, 86, 166, 0.08);
-		--shadow-hover: rgba(46, 86, 166, 0.15);
-		--gradient-primary: linear-gradient(135deg, #2E56A6 0%, #3F61A6 100%);
-		--gradient-secondary: linear-gradient(135deg, #416CA6 0%, #7A91BF 100%);
-		--gradient-success: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-		--primary-color: #2E56A6;
-		--primary-light: #3F61A6;
-		--primary-medium: #416CA6;
-		--primary-soft: #7A91BF;
-		--neutral-light: #F2F2F2;
-		--alert-info-bg: #e8f0ff;
-		--alert-info-border: #2E56A6;
-		--alert-info-text: #2E56A6;
-		--alert-success-bg: #e8f5e8;
-		--alert-success-border: #4caf50;
-		--alert-success-text: #2e7d32;
-		--alert-warning-bg: #fff3e0;
-		--alert-warning-border: #ff9800;
-		--alert-warning-text: #ef6c00;
-		--alert-error-bg: #ffebee;
-		--alert-error-border: #f44336;
-		--alert-error-text: #c62828;
-	}
+	/* CSS variables are defined in app.css - avoid duplication */
 
 	:global([data-theme="dark"]) {
-		--bg-primary: #0f172a;
-		--bg-secondary: #1e293b;
-		--bg-tertiary: #334155;
-		--text-primary: #f1f5f9;
-		--text-secondary: #cbd5e1;
-		--text-muted: #94a3b8;
-		--border-color: #475569;
-		--shadow: rgba(0, 0, 0, 0.3);
-		--shadow-hover: rgba(0, 0, 0, 0.5);
-		--gradient-primary: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
-		--gradient-secondary: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
-		--gradient-success: linear-gradient(135deg, #22a03d 0%, #1db584 100%);
-		--primary-color: #60a5fa;
-		--primary-light: #93c5fd;
-		--primary-medium: #3b82f6;
-		--primary-soft: #1e40af;
-		--neutral-light: #334155;
+		/* Dark theme alert colors only */
 		--alert-info-bg: #1a237e;
 		--alert-info-border: #1976d2;
 		--alert-info-text: #90caf9;
@@ -84,14 +39,7 @@
 		--alert-error-text: #ffcdd2;
 	}
 
-	:global(body) {
-		margin: 0;
-		padding: 0;
-		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-		background-color: var(--bg-primary);
-		color: var(--text-primary);
-		transition: background-color 0.3s ease, color 0.3s ease;
-	}
+	/* body styles moved to app.css */
 
 	main {
 		min-height: 100vh;
@@ -147,7 +95,10 @@
 		box-shadow: 0 4px 6px var(--shadow);
 		border: 1px solid var(--border-color);
 		text-align: center;
-		transition: transform 0.3s ease, background-color 0.3s ease, border-color 0.3s ease;
+	}
+
+	:global(.metric-card):hover {
+		transition: transform 0.2s ease;
 	}
 
 	:global(.metric-card:hover) {
@@ -173,7 +124,6 @@
 		box-shadow: 0 4px 6px var(--shadow);
 		border: 1px solid var(--border-color);
 		margin-bottom: 20px;
-		transition: background-color 0.3s ease, border-color 0.3s ease;
 	}
 
 	:global(.chart-container) {
@@ -190,7 +140,6 @@
 		margin-bottom: 30px;
 		box-shadow: 0 8px 32px var(--shadow);
 		border: 1px solid var(--border-color);
-		transition: background 0.3s ease, border-color 0.3s ease;
 	}
 	
 	:global(.search-container) {
@@ -332,7 +281,6 @@
 		border-radius: 12px;
 		padding: 4px;
 		gap: 2px;
-		transition: background-color 0.3s ease;
 	}
 	
 	:global(.sort-btn) {
@@ -470,7 +418,6 @@
 		border-radius: 12px;
 		box-shadow: 0 4px 6px var(--shadow);
 		border: 1px solid var(--border-color);
-		transition: background-color 0.3s ease, border-color 0.3s ease;
 	}
 	
 	:global(.empty-state h3) {

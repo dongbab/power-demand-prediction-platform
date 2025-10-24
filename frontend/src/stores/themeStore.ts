@@ -45,14 +45,14 @@ function applyTheme(theme: Theme) {
 	if (!browser) return;
 
 	const root = document.documentElement;
-	
-	if (theme === 'auto') {
-		// Use system preference
-		const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-		root.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
-	} else {
-		root.setAttribute('data-theme', theme);
-	}
+
+	// Determine target theme
+	const targetTheme = theme === 'auto'
+		? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+		: theme;
+
+	// Immediate update - let browser optimize
+	root.setAttribute('data-theme', targetTheme);
 }
 
 export const theme = createThemeStore();
@@ -60,11 +60,17 @@ export const theme = createThemeStore();
 // Listen for system theme changes when in auto mode
 if (browser) {
 	const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-	mediaQuery.addListener((e) => {
-		theme.subscribe(currentTheme => {
-			if (currentTheme === 'auto') {
-				applyTheme('auto');
-			}
-		})();
+	let currentTheme: Theme = 'auto';
+
+	// Subscribe once and store the unsubscribe function
+	const unsubscribe = theme.subscribe(value => {
+		currentTheme = value;
+	});
+
+	// Use addEventListener instead of deprecated addListener
+	mediaQuery.addEventListener('change', (e) => {
+		if (currentTheme === 'auto') {
+			applyTheme('auto');
+		}
 	});
 }

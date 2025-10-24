@@ -789,6 +789,8 @@ class StationService:
                 max_contract = 100  # 기본값
                 is_fast_charger_fallback = True
 
+            chart_data = self._generate_monthly_chart_data(patterns)
+
             # 실제 데이터 기반 최적 계약전력 계산
             optimal_result = self._calculate_optimal_contract_power(
                 station_df, current_peak

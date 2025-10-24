@@ -566,7 +566,7 @@ async def get_monthly_contract_recommendation(
     mode: str = "p95",
     round_kw: int = 1
 ):
-    
+
     try:
         station_service = get_station_service()
         return station_service.get_monthly_contract_recommendation(
@@ -575,6 +575,72 @@ async def get_monthly_contract_recommendation(
 
     except Exception as e:
         logger.error(f"Error getting contract recommendation for {station_id}: {e}", exc_info=True)
+        return {"success": False, "error": str(e), "station_id": station_id}
+
+
+@api_router.get("/stations/{station_id}/contract-analysis")
+async def analyze_station_contract(
+    station_id: str,
+    current_contract_kw: float
+):
+    """
+    충전소의 현재 계약 전력을 분석하여 과대/과소 계약 여부 판별
+
+    Args:
+        station_id: 충전소 ID
+        current_contract_kw: 현재 계약 전력 (kW)
+
+    Returns:
+        계약 분석 결과 (과대/과소/적정 판별 및 의사결정 정보)
+    """
+    try:
+        from ..services.contract_analyzer import ContractAnalyzer
+
+        # 충전소 데이터 로드
+        loader = ChargingDataLoader(station_id)
+        station_data = loader.load_historical_sessions(days=365)
+
+        if station_data.empty:
+            return {
+                "success": False,
+                "error": "충전소 데이터가 없습니다.",
+                "station_id": station_id
+            }
+
+        # 충전소 정보 가져오기
+        station_service = get_station_service()
+
+        # 충전기 타입 판별
+        charger_type = station_service._get_charger_type(station_data)
+
+        # 데이터 품질 평가
+        data_count = len(station_data)
+        if data_count > 1000:
+            data_quality = "high"
+        elif data_count > 500:
+            data_quality = "medium"
+        else:
+            data_quality = "low"
+
+        # 계약 분석 수행
+        analyzer = ContractAnalyzer()
+        analysis = analyzer.analyze_contract(
+            current_contract_kw=current_contract_kw,
+            station_data=station_data,
+            charger_type=charger_type,
+            data_quality=data_quality
+        )
+
+        # 결과를 딕셔너리로 변환
+        result = analyzer.to_dict(analysis)
+        result["success"] = True
+        result["station_id"] = station_id
+        result["timestamp"] = datetime.now().isoformat()
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error analyzing contract for {station_id}: {e}", exc_info=True)
         return {"success": False, "error": str(e), "station_id": station_id}
 
 

@@ -5,7 +5,7 @@ import type {
     MonthlyContractResponse,
     ApiError,
 } from "../lib/types.ts";
-import type { RequestInit } from "node-fetch"; // 브라우저 환경이면 제거해도 됨
+// import type { RequestInit } from "node-fetch"; // 브라우저 환경에서는 불필요
 
 const BASE = ""; // dev: Vite 프록시 사용, prod: 같은 오리진
 

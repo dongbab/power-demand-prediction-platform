@@ -235,31 +235,6 @@
 
 <style>
 
-    .upload-header {
-        text-align: center;
-        margin-bottom: 2rem;
-        background: transparent;
-    }
-
-    .upload-header h2 {
-        margin: 0 0 1rem 0;
-        color: var(--text-primary);
-        font-size: 2rem;
-        font-weight: 700;
-        letter-spacing: -0.025em;
-        line-height: 1.2;
-    }
-
-    .upload-header p {
-        margin: 0;
-        color: var(--text-secondary);
-        font-size: 1.1rem;
-        font-weight: 400;
-        max-width: 500px;
-        margin: 0 auto;
-        line-height: 1.5;
-    }
-
     .upload-area {
         border: 2px dashed var(--border-color);
         border-radius: 16px;
@@ -412,40 +387,6 @@
         }
     }
 
-    /* 업로드 컨트롤 스타일 */
-    .upload-controls {
-        display: flex;
-        align-items: center;
-        gap: 20px;
-        margin-bottom: 20px;
-        flex-wrap: wrap;
-    }
-
-    .btn-upload {
-        background: var(--gradient-success);
-        color: white;
-        border: none;
-        padding: 12px 24px;
-        border-radius: 8px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .btn-upload:hover:not(:disabled) {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
-    }
-
-    .btn-upload:disabled {
-        background: var(--text-muted);
-        cursor: not-allowed;
-        transform: none;
-    }
-
     .upload-requirements {
         margin-bottom: 24px;
     }
@@ -561,25 +502,12 @@
 
     /* 반응형 디자인 */
     @media (max-width: 768px) {
-        .upload-controls {
-            flex-direction: column;
-            text-align: center;
-            gap: 12px;
+        .requirement-grid {
+            grid-template-columns: 1fr;
         }
 
-        .btn-upload {
-            padding: 10px 20px;
-            font-size: 0.9em;
-        }
-
-        .hint {
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .chip {
-            font-size: 0.75rem;
-            padding: 3px 6px;
+        .upload-area {
+            padding: 2rem 1rem;
         }
     }
 </style>

@@ -1,11 +1,3 @@
-"""
-Dynamic Pattern Analysis for EV Charging Power Prediction
-
-This module implements adaptive seasonal and temporal pattern detection
-based on actual charging data, replacing static pattern factors with
-data-driven dynamic calculations.
-"""
-
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, Optional, Tuple, List
@@ -30,13 +22,6 @@ class PatternFactors:
 
 
 class DynamicPatternAnalyzer:
-    """
-    Analyzes charging data to extract adaptive seasonal, weekly, and hourly patterns.
-    
-    This class calculates dynamic adjustment factors based on actual data patterns
-    rather than using static predefined factors, making predictions more responsive
-    to actual charging behavior.
-    """
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -45,16 +30,6 @@ class DynamicPatternAnalyzer:
         self.historical_weight = 0.3  # Weight for historical data
         
     def analyze_patterns(self, data: pd.DataFrame, station_id: str = None) -> PatternFactors:
-        """
-        Analyze charging data to extract dynamic patterns.
-        
-        Args:
-            data: DataFrame with charging session data
-            station_id: Station identifier for logging
-            
-        Returns:
-            PatternFactors object with calculated adjustment factors
-        """
         if data.empty:
             return self._create_fallback_patterns("empty_data")
             
@@ -519,7 +494,6 @@ class DynamicPatternAnalyzer:
         return strength
     
     def _get_default_seasonal_factors(self) -> Dict[int, float]:
-        """Get default seasonal factors based on general EV charging patterns"""
         # Mild seasonal patterns for EV charging (less pronounced than heating/cooling)
         return {
             1: 0.95,   # January - slightly lower (winter)
@@ -537,7 +511,6 @@ class DynamicPatternAnalyzer:
         }
     
     def _get_default_weekly_factors(self) -> Dict[int, float]:
-        """Get default weekly factors based on general commuting patterns"""
         return {
             0: 1.1,    # Monday - high (commute start)
             1: 1.05,   # Tuesday - moderate high
@@ -549,7 +522,6 @@ class DynamicPatternAnalyzer:
         }
     
     def _get_default_hourly_factors(self) -> Dict[int, float]:
-        """Get default hourly factors based on general daily patterns"""
         # Peak hours: morning (7-9), evening (17-19)
         factors = {}
         for hour in range(24):

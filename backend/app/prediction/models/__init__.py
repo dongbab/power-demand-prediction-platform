@@ -1,15 +1,12 @@
-from .base import ModelPrediction
-from .extreme_value import ExtremeValueModels
-from .statistical import StatisticalModels
-from .time_series import TimeSeriesModels
-from .machine_learning import MachineLearningModels
-from .ensemble import EnsemblePredictor
+from .prediction_types import ModelPrediction, EnsemblePrediction
+from .extreme_value_models import ExtremeValueModels
+from .statistical_models import StatisticalModels
+from .time_series_models import TimeSeriesModels
 
 __all__ = [
     "ModelPrediction",
-    "ExtremeValueModels", 
+    "EnsemblePrediction",
+    "ExtremeValueModels",
     "StatisticalModels",
     "TimeSeriesModels",
-    "MachineLearningModels",
-    "EnsemblePredictor"
 ]

@@ -11,6 +11,10 @@
 	$: currentTheme = $theme;
 
 	function handleThemeChange() {
+		// Performance measurement
+		const startTime = performance.now();
+		performance.mark('theme-change-start');
+
 		if (currentTheme === 'light') {
 			theme.setTheme('dark');
 		} else if (currentTheme === 'dark') {
@@ -18,6 +22,28 @@
 		} else {
 			theme.setTheme('light');
 		}
+
+		// Measure after next paint
+		requestAnimationFrame(() => {
+			requestAnimationFrame(() => {
+				const endTime = performance.now();
+				performance.mark('theme-change-end');
+				performance.measure('theme-change', 'theme-change-start', 'theme-change-end');
+
+				const duration = endTime - startTime;
+				console.log(`🎨 테마 전환 시간: ${duration.toFixed(2)}ms`);
+
+				// Get paint timing
+				const paintEntries = performance.getEntriesByType('paint');
+				console.log('🖌️ Paint 이벤트:', paintEntries);
+
+				// Get measure
+				const measures = performance.getEntriesByName('theme-change');
+				if (measures.length > 0) {
+					console.log('📊 성능 측정:', measures[0]);
+				}
+			});
+		});
 	}
 
 	function getThemeIcon(themeValue) {
@@ -66,7 +92,6 @@
 		border-radius: 20px;
 		color: white;
 		cursor: pointer;
-		transition: all 0.3s ease;
 		font-size: 0.9em;
 		font-weight: 500;
 	}
@@ -75,6 +100,14 @@
 		background: rgba(255, 255, 255, 0.2);
 		transform: translateY(-1px);
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+		transition: background 0.15s ease-out,
+		            transform 0.15s ease-out,
+		            box-shadow 0.15s ease-out;
+	}
+
+	.theme-toggle:active {
+		transform: translateY(0);
+		transition: transform 0.05s ease-out;
 	}
 
 	.theme-icon {

@@ -713,25 +713,6 @@
 </div>
 
 <style>
-    .nav-link {
-        margin-top: 20px;
-    }
-
-    .btn-back {
-        background: rgba(255, 255, 255, 0.2);
-        color: white;
-        padding: 8px 16px;
-        border-radius: 20px;
-        text-decoration: none;
-        font-size: 0.9em;
-        transition: all 0.3s ease;
-    }
-
-    .btn-back:hover {
-        background: rgba(255, 255, 255, 0.3);
-        transform: translateX(-2px);
-    }
-
     .loading-container {
         text-align: center;
         padding: 60px 20px;
@@ -988,12 +969,6 @@
         align-items: center;
         justify-content: center;
         gap: 12px;
-    }
-
-    .title-icon {
-        width: 32px;
-        height: 32px;
-        stroke-width: 2;
     }
 
     .header-subtitle {
