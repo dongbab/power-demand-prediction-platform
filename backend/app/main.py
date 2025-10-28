@@ -21,7 +21,7 @@ async def initialize_services():
     try:
         # API routes가 main을 참조할 수 있도록 설정
         from .api.routes import set_main_module
-        
+
         # 배치 처리를 위한 디렉토리 생성
         import os
         os.makedirs("data/predictions", exist_ok=True)
@@ -30,6 +30,24 @@ async def initialize_services():
 
         set_main_module(sys.modules[__name__])
         logger.info("Main module reference set for routes")
+
+        # 예측 엔진 초기화 (싱글톤 - 앱 시작 시 한 번만 로드)
+        from .prediction.engine_factory import initialize_prediction_engine
+        from pathlib import Path
+
+        # LSTM 모델 사용 여부 체크
+        lstm_model_path = Path("models/lstm_model")
+        use_lstm = lstm_model_path.exists() and (lstm_model_path / "lstm_model.h5").exists()
+
+        if use_lstm:
+            logger.info("LSTM model detected, initializing LSTM engine...")
+            initialize_prediction_engine(use_lstm=True, model_path="models/lstm_model")
+        else:
+            logger.info("No LSTM model found, using traditional engine")
+            initialize_prediction_engine(use_lstm=False)
+
+        logger.info("✓ Prediction engine initialized")
+
     except Exception as e:
         logger.error(f"Service initialization failed: {e}")
         raise

@@ -619,10 +619,10 @@ class StationService:
     def _calculate_predictions(
         self, patterns: Dict[str, Any], station_id: str
     ) -> Dict[str, Any]:
-        from ..prediction.engine import PredictionEngine
+        from ..prediction.engine_factory import get_prediction_engine
 
-        # 고급 예측 엔진 초기화
-        prediction_engine = PredictionEngine()
+        # 고급 예측 엔진 가져오기 (캐시된 인스턴스 - 빠른 로딩)
+        prediction_engine = get_prediction_engine()
 
         # 원본 데이터 가져오기 (station_id 매개변수 유지)
         try:
@@ -1179,8 +1179,8 @@ class StationService:
             return cached_result
 
         try:
-            from ..prediction.engine import PredictionEngine
-            
+            from ..prediction.engine_factory import get_prediction_engine
+
             loader = ChargingDataLoader(station_id)
             df = loader.load_historical_sessions(days=days)
 
@@ -1191,8 +1191,8 @@ class StationService:
                     "station_id": station_id,
                 }
 
-            # PredictionEngine을 사용하여 에너지 예측 수행
-            prediction_engine = PredictionEngine()
+            # PredictionEngine을 사용하여 에너지 예측 수행 (캐시된 인스턴스)
+            prediction_engine = get_prediction_engine()
             result = prediction_engine.predict_energy_demand(df, station_id, days)
             
             # station_name 추가
