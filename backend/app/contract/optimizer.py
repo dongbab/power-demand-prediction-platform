@@ -1,0 +1,397 @@
+"""
+계약전력 최적화 엔진
+
+10kW 단위 후보 생성 및 비용 최소화 알고리즘
+"""
+
+import numpy as np
+import logging
+from typing import Dict, Any, List, Optional, Tuple
+from dataclasses import dataclass
+
+from .cost_calculator import KEPCOCostCalculator
+
+
+@dataclass
+class ContractCandidate:
+    """계약전력 후보"""
+    contract_kw: int  # 10kW 단위
+    expected_annual_cost: float  # 연간 기대비용
+    overage_probability: float  # 초과 확률 (%)
+    waste_probability: float  # 낭비 확률 (%)
+    cost_std: float  # 비용 표준편차
+    cost_percentiles: Dict[str, float]  # 비용 분위수
+    risk_score: float  # 리스크 점수
+
+
+@dataclass
+class OptimizationResult:
+    """최적화 결과"""
+    optimal_contract_kw: int  # 최적 계약전력
+    current_contract_kw: Optional[int]  # 현재 계약전력
+    
+    # 비용 분석
+    expected_annual_cost: float  # 예상 연간 비용
+    expected_savings: Optional[float]  # 예상 절감액 (현재 대비)
+    savings_percent: Optional[float]  # 절감 비율
+    
+    # 리스크 분석
+    overage_probability: float  # 초과 확률
+    waste_probability: float  # 낭비 확률
+    confidence_level: float  # 신뢰도 (0-1)
+    
+    # 후보 분석
+    all_candidates: List[ContractCandidate]  # 모든 후보
+    optimal_candidate: ContractCandidate  # 최적 후보
+    
+    # 추천 사유
+    recommendation_reason: str
+    decision_factors: Dict[str, Any]
+
+
+class ContractOptimizer:
+    """
+    계약전력 최적화 엔진
+    
+    핵심 알고리즘:
+    1. 10kW 단위 후보 생성 (예측분포 기준 ±30kW 범위)
+    2. 각 후보별 Monte Carlo 시뮬레이션 (1,000회)
+    3. 비용 기댓값 계산 및 리스크 평가
+    4. 비용 최소화 + 리스크 균형 최적화
+    """
+    
+    def __init__(
+        self,
+        cost_calculator: Optional[KEPCOCostCalculator] = None,
+        candidate_step: int = 10  # 10kW 단위
+    ):
+        """
+        Args:
+            cost_calculator: 비용 계산기 (기본값: 새 인스턴스)
+            candidate_step: 후보 간격 (kW) - 기본 10kW
+        """
+        self.cost_calculator = cost_calculator or KEPCOCostCalculator()
+        self.candidate_step = candidate_step
+        self.logger = logging.getLogger(__name__)
+        
+    def optimize_contract(
+        self,
+        prediction_distribution: np.ndarray,
+        current_contract_kw: Optional[int] = None,
+        min_contract_kw: int = 10,
+        max_contract_kw: int = 200,
+        risk_tolerance: float = 0.1  # 0.0 (보수적) ~ 1.0 (공격적)
+    ) -> OptimizationResult:
+        """
+        계약전력 최적화 실행
+        
+        Args:
+            prediction_distribution: 예측 피크 확률분포 (np.ndarray, 예: 1,000개 샘플)
+            current_contract_kw: 현재 계약전력 (선택사항)
+            min_contract_kw: 최소 계약전력
+            max_contract_kw: 최대 계약전력
+            risk_tolerance: 리스크 허용도 (0=보수적, 1=공격적)
+            
+        Returns:
+            OptimizationResult: 최적화 결과
+        """
+        self.logger.info(
+            f"계약전력 최적화 시작: 분포 크기={len(prediction_distribution)}, "
+            f"현재 계약={current_contract_kw}kW, 리스크 허용도={risk_tolerance}"
+        )
+        
+        # 1. 후보 범위 결정
+        candidate_range = self._determine_candidate_range(
+            prediction_distribution,
+            min_contract_kw,
+            max_contract_kw
+        )
+        
+        self.logger.info(
+            f"후보 범위: {candidate_range[0]}kW ~ {candidate_range[1]}kW "
+            f"(총 {len(range(candidate_range[0], candidate_range[1] + 1, self.candidate_step))}개)"
+        )
+        
+        # 2. 각 후보별 비용 시뮬레이션
+        candidates = self._evaluate_candidates(
+            candidate_range,
+            prediction_distribution,
+            risk_tolerance
+        )
+        
+        if not candidates:
+            raise ValueError("유효한 계약전력 후보를 생성할 수 없습니다.")
+        
+        # 3. 최적 후보 선택 (비용 최소화 + 리스크 균형)
+        optimal = self._select_optimal_candidate(candidates, risk_tolerance)
+        
+        # 4. 현재 계약과 비교
+        expected_savings = None
+        savings_percent = None
+        
+        if current_contract_kw is not None:
+            current_cost = self._estimate_cost_for_contract(
+                current_contract_kw,
+                prediction_distribution
+            )
+            expected_savings = current_cost - optimal.expected_annual_cost
+            savings_percent = (expected_savings / current_cost * 100) if current_cost > 0 else 0
+            
+            self.logger.info(
+                f"현재 계약 대비: {expected_savings:,.0f}원 절감 ({savings_percent:.1f}%)"
+            )
+        
+        # 5. 추천 사유 생성
+        recommendation_reason = self._generate_recommendation(
+            optimal,
+            current_contract_kw,
+            expected_savings,
+            prediction_distribution
+        )
+        
+        # 6. 의사결정 요인 분석
+        decision_factors = self._analyze_decision_factors(
+            optimal,
+            candidates,
+            prediction_distribution,
+            risk_tolerance
+        )
+        
+        return OptimizationResult(
+            optimal_contract_kw=optimal.contract_kw,
+            current_contract_kw=current_contract_kw,
+            expected_annual_cost=optimal.expected_annual_cost,
+            expected_savings=expected_savings,
+            savings_percent=savings_percent,
+            overage_probability=optimal.overage_probability,
+            waste_probability=optimal.waste_probability,
+            confidence_level=self._calculate_confidence(prediction_distribution),
+            all_candidates=candidates,
+            optimal_candidate=optimal,
+            recommendation_reason=recommendation_reason,
+            decision_factors=decision_factors
+        )
+    
+    def _determine_candidate_range(
+        self,
+        distribution: np.ndarray,
+        min_kw: int,
+        max_kw: int
+    ) -> Tuple[int, int]:
+        """후보 범위 결정 (예측분포 기준 ±30kW)"""
+        # 10th ~ 99th percentile 기준
+        p10 = np.percentile(distribution, 10)
+        p99 = np.percentile(distribution, 99)
+        
+        # ±30kW 여유 추가
+        range_min = max(min_kw, int(np.floor((p10 - 30) / self.candidate_step)) * self.candidate_step)
+        range_max = min(max_kw, int(np.ceil((p99 + 30) / self.candidate_step)) * self.candidate_step)
+        
+        # 최소한 3개 후보는 확보
+        if range_max - range_min < self.candidate_step * 2:
+            median = np.median(distribution)
+            range_min = max(min_kw, int((median - 30) / self.candidate_step) * self.candidate_step)
+            range_max = min(max_kw, int((median + 30) / self.candidate_step) * self.candidate_step)
+        
+        return (range_min, range_max)
+    
+    def _evaluate_candidates(
+        self,
+        candidate_range: Tuple[int, int],
+        distribution: np.ndarray,
+        risk_tolerance: float
+    ) -> List[ContractCandidate]:
+        """모든 후보 평가"""
+        candidates = []
+        
+        for contract_kw in range(candidate_range[0], candidate_range[1] + 1, self.candidate_step):
+            # Monte Carlo 시뮬레이션
+            cost_analysis = self.cost_calculator.estimate_cost_distribution(
+                contract_kw,
+                distribution.tolist()
+            )
+            
+            # 리스크 점수 계산 (낮을수록 좋음)
+            risk_score = self._calculate_risk_score(
+                cost_analysis["overage_probability"],
+                cost_analysis["waste_probability"],
+                cost_analysis["cost_std"],
+                risk_tolerance
+            )
+            
+            candidate = ContractCandidate(
+                contract_kw=contract_kw,
+                expected_annual_cost=cost_analysis["expected_annual_cost"],
+                overage_probability=cost_analysis["overage_probability"],
+                waste_probability=cost_analysis["waste_probability"],
+                cost_std=cost_analysis["cost_std"],
+                cost_percentiles=cost_analysis["cost_percentiles"],
+                risk_score=risk_score
+            )
+            
+            candidates.append(candidate)
+            
+            self.logger.debug(
+                f"후보 {contract_kw}kW: 연간 {candidate.expected_annual_cost:,.0f}원, "
+                f"초과확률 {candidate.overage_probability:.1f}%, "
+                f"리스크점수 {risk_score:.3f}"
+            )
+        
+        return candidates
+    
+    def _calculate_risk_score(
+        self,
+        overage_prob: float,
+        waste_prob: float,
+        cost_std: float,
+        risk_tolerance: float
+    ) -> float:
+        """
+        리스크 점수 계산
+        
+        리스크 = 초과 위험 + 낭비 위험 + 변동성
+        - risk_tolerance=0: 보수적 (초과 위험 크게 페널티)
+        - risk_tolerance=1: 공격적 (낭비 위험 크게 페널티)
+        """
+        # 정규화
+        overage_risk = overage_prob / 100.0
+        waste_risk = waste_prob / 100.0
+        volatility = cost_std / 1000000.0  # 백만원 단위로 정규화
+        
+        # 가중치 계산
+        overage_weight = 1.0 - risk_tolerance  # 보수적일수록 초과 위험 중시
+        waste_weight = risk_tolerance  # 공격적일수록 낭비 위험 중시
+        
+        risk_score = (
+            overage_risk * overage_weight * 2.0 +  # 초과는 2배 가중
+            waste_risk * waste_weight +
+            volatility * 0.5  # 변동성은 0.5배
+        )
+        
+        return risk_score
+    
+    def _select_optimal_candidate(
+        self,
+        candidates: List[ContractCandidate],
+        risk_tolerance: float
+    ) -> ContractCandidate:
+        """최적 후보 선택 (비용 + 리스크 균형)"""
+        # 비용과 리스크의 가중 합산 최소화
+        best_candidate = None
+        best_score = float('inf')
+        
+        for candidate in candidates:
+            # 정규화된 비용 (최소 비용 대비 비율)
+            min_cost = min(c.expected_annual_cost for c in candidates)
+            normalized_cost = candidate.expected_annual_cost / min_cost if min_cost > 0 else 1.0
+            
+            # 종합 점수 = 정규화 비용 + 리스크 점수
+            total_score = normalized_cost + candidate.risk_score
+            
+            if total_score < best_score:
+                best_score = total_score
+                best_candidate = candidate
+        
+        return best_candidate
+    
+    def _estimate_cost_for_contract(
+        self,
+        contract_kw: int,
+        distribution: np.ndarray
+    ) -> float:
+        """특정 계약전력의 연간 비용 추정"""
+        cost_analysis = self.cost_calculator.estimate_cost_distribution(
+            contract_kw,
+            distribution.tolist()
+        )
+        return cost_analysis["expected_annual_cost"]
+    
+    def _calculate_confidence(self, distribution: np.ndarray) -> float:
+        """예측 신뢰도 계산 (샘플 수 및 분산 기반)"""
+        sample_size = len(distribution)
+        cv = np.std(distribution) / np.mean(distribution) if np.mean(distribution) > 0 else 1.0
+        
+        # 샘플 크기 신뢰도
+        size_confidence = min(1.0, sample_size / 1000.0)
+        
+        # 변동성 신뢰도 (낮을수록 신뢰도 높음)
+        variability_confidence = max(0.3, 1.0 - cv)
+        
+        return (size_confidence + variability_confidence) / 2.0
+    
+    def _generate_recommendation(
+        self,
+        optimal: ContractCandidate,
+        current_contract: Optional[int],
+        savings: Optional[float],
+        distribution: np.ndarray
+    ) -> str:
+        """추천 사유 생성"""
+        reasons = []
+        
+        # 1. 최적화 결과
+        reasons.append(
+            f"10kW 단위 최적화 결과 {optimal.contract_kw}kW 선정"
+        )
+        
+        # 2. 예측분포 기반
+        p50 = np.percentile(distribution, 50)
+        p95 = np.percentile(distribution, 95)
+        reasons.append(
+            f"예측 피크 중앙값 {p50:.0f}kW, 95백분위 {p95:.0f}kW 기준"
+        )
+        
+        # 3. 절감액
+        if savings is not None and savings > 0:
+            reasons.append(
+                f"현행 대비 연간 {savings:,.0f}원 절감 예상"
+            )
+        
+        # 4. 리스크 분석
+        if optimal.overage_probability < 10:
+            reasons.append(
+                f"초과 위험도 낮음 ({optimal.overage_probability:.1f}%)"
+            )
+        elif optimal.overage_probability < 20:
+            reasons.append(
+                f"초과 위험도 적정 ({optimal.overage_probability:.1f}%)"
+            )
+        else:
+            reasons.append(
+                f"⚠️ 초과 위험 존재 ({optimal.overage_probability:.1f}%)"
+            )
+        
+        return " | ".join(reasons)
+    
+    def _analyze_decision_factors(
+        self,
+        optimal: ContractCandidate,
+        all_candidates: List[ContractCandidate],
+        distribution: np.ndarray,
+        risk_tolerance: float
+    ) -> Dict[str, Any]:
+        """의사결정 요인 분석"""
+        return {
+            "optimization_method": "10kW 단위 Monte Carlo 시뮬레이션",
+            "simulation_count": len(distribution),
+            "candidate_count": len(all_candidates),
+            "risk_tolerance": risk_tolerance,
+            "distribution_stats": {
+                "mean": float(np.mean(distribution)),
+                "std": float(np.std(distribution)),
+                "min": float(np.min(distribution)),
+                "max": float(np.max(distribution)),
+                "p50": float(np.percentile(distribution, 50)),
+                "p95": float(np.percentile(distribution, 95))
+            },
+            "cost_range": {
+                "min": min(c.expected_annual_cost for c in all_candidates),
+                "max": max(c.expected_annual_cost for c in all_candidates),
+                "optimal": optimal.expected_annual_cost
+            },
+            "risk_assessment": {
+                "overage_risk": "낮음" if optimal.overage_probability < 10 else "보통" if optimal.overage_probability < 20 else "높음",
+                "waste_risk": "낮음" if optimal.waste_probability < 30 else "보통" if optimal.waste_probability < 50 else "높음",
+                "overall_risk": optimal.risk_score
+            }
+        }

@@ -1,4 +1,7 @@
-from .engine import PredictionEngine
-from .stats_extreme import estimate_extremes_from_df
+# Re-export from the new modular structure
+from .prediction_engine import PredictionEngine
+from .lstm_prediction_engine import LSTMPredictionEngine
+from .models.prediction_types import ModelPrediction, EnsemblePrediction
 
-__all__ = ["PredictionEngine", "estimate_extremes_from_df"]
+# Keep the old class name for backwards compatibility
+__all__ = ['PredictionEngine', 'LSTMPredictionEngine', 'ModelPrediction', 'EnsemblePrediction']

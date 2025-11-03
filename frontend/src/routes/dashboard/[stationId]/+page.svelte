@@ -15,6 +15,7 @@
 
     import PeakPowerPredictor from "../../../components/Dashboard/PeakPowerPredictor.svelte";
     import PowerDemandPredictor from "../../../components/Dashboard/PowerDemandPredictor.svelte";
+    import EnsemblePrediction from "../../../components/Dashboard/EnsemblePrediction.svelte";
     import LoadingSpinner from "../../../components/LoadingSpinner.svelte";
 
     let stationId;
@@ -421,6 +422,9 @@
             {$error}
         </div>
     {:else}
+        <!-- Phase 3: AI 앙상블 예측 (최상단) -->
+        <EnsemblePrediction {stationId} currentContractKw={100} />
+
         <!-- Main Prediction Sections -->
         <div class="prediction-sections">
             <!-- 순간최고 전력 예측 박스 -->

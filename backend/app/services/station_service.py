@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 import logging
 
 from ..data.loader import ChargingDataLoader
-from ..features.aggregator import FeatureAggregator
 
 
 class StationService:

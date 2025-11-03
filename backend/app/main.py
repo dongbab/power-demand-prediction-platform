@@ -32,21 +32,23 @@ async def initialize_services():
         logger.info("Main module reference set for routes")
 
         # 예측 엔진 초기화 (싱글톤 - 앱 시작 시 한 번만 로드)
-        from .prediction.engine_factory import initialize_prediction_engine
-        from pathlib import Path
+        # NOTE: Phase 3 앙상블 엔진은 API 호출 시 동적으로 초기화됨
+        # from .prediction.engine_factory import initialize_prediction_engine
+        # from pathlib import Path
 
-        # LSTM 모델 사용 여부 체크
-        lstm_model_path = Path("models/lstm_model")
-        use_lstm = lstm_model_path.exists() and (lstm_model_path / "lstm_model.h5").exists()
+        # # LSTM 모델 사용 여부 체크
+        # lstm_model_path = Path("models/lstm_model")
+        # use_lstm = lstm_model_path.exists() and (lstm_model_path / "lstm_model.h5").exists()
 
-        if use_lstm:
-            logger.info("LSTM model detected, initializing LSTM engine...")
-            initialize_prediction_engine(use_lstm=True, model_path="models/lstm_model")
-        else:
-            logger.info("No LSTM model found, using traditional engine")
-            initialize_prediction_engine(use_lstm=False)
+        # if use_lstm:
+        #     logger.info("LSTM model detected, initializing LSTM engine...")
+        #     initialize_prediction_engine(use_lstm=True, model_path="models/lstm_model")
+        # else:
+        #     logger.info("No LSTM model found, using traditional engine")
+        #     initialize_prediction_engine(use_lstm=False)
 
-        logger.info("✓ Prediction engine initialized")
+        # logger.info("✓ Prediction engine initialized")
+        logger.info("✓ Prediction engines ready for on-demand initialization")
 
     except Exception as e:
         logger.error(f"Service initialization failed: {e}")
@@ -90,12 +92,13 @@ def setup_routes():
     )
 
     from .api.routes import api_router
-    from .api.batch import router as batch_router
+    # Batch API 일시적으로 비활성화 (engine 모듈 의존성 때문)
+    # from .api.batch import router as batch_router
 
     app.include_router(api_router, prefix="/api")
-    app.include_router(batch_router, prefix="/api")
+    # app.include_router(batch_router, prefix="/api")
     if logger:
-        logger.info("Routes configured (including batch endpoints)")
+        logger.info("Routes configured")
 
 
 # ===== FastAPI App =====

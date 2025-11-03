@@ -5,6 +5,9 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 
+# 새로운 계약 최적화 엔진 import
+from ..contract import ContractOptimizer, KEPCOCostCalculator, RecommendationEngine
+
 
 class ContractStatus(Enum):
     """계약 상태 분류"""
@@ -39,14 +42,23 @@ class ContractAnalysis:
 
 
 class ContractAnalyzer:
-    """계약 전력 분석 및 최적화"""
+    """
+    계약 전력 분석 및 최적화
+    
+    레거시 분석기 - 새로운 ContractOptimizer와 통합
+    """
 
-    # 요금 상수 (예시 - 실제 전기요금 기준으로 조정 필요)
+    # 요금 상수 (레거시 - KEPCO 계산기 사용 권장)
     BASIC_RATE_PER_KW = 8320  # 기본요금 (원/kW/월) - 산업용 전력 기준
     OVERAGE_PENALTY_RATE = 1.5  # 초과 사용 시 패널티 배율
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+        
+        # 새로운 최적화 엔진 초기화
+        self.optimizer = ContractOptimizer()
+        self.cost_calculator = KEPCOCostCalculator()
+        self.recommendation_engine = RecommendationEngine()
 
         # 충전기 타입별 최대 계약 전력
         self.charger_limits = {
@@ -341,6 +353,106 @@ class ContractAnalyzer:
         }.get(data_quality, 0.8)
 
         return min(0.95, count_confidence * quality_factor)
+    
+    def optimize_contract_with_lstm_distribution(
+        self,
+        station_id: str,
+        lstm_prediction: Any,  # EnsemblePrediction
+        current_contract_kw: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        LSTM Monte Carlo Dropout 분포를 사용한 계약전력 최적화
+        
+        Args:
+            station_id: 충전소 ID
+            lstm_prediction: LSTM 예측 결과 (EnsemblePrediction)
+            current_contract_kw: 현재 계약전력
+            
+        Returns:
+            Dict: 최적화 결과
+        """
+        try:
+            # LSTM 예측에서 확률분포 추출
+            prediction_distribution = None
+            
+            # method_details에서 prediction_distribution 찾기
+            for model_pred in lstm_prediction.model_predictions:
+                if "distribution" in model_pred.method_details:
+                    # 분포 데이터가 있으면 추출
+                    dist_data = model_pred.method_details.get("prediction_distribution")
+                    if dist_data:
+                        prediction_distribution = np.array(dist_data)
+                        break
+            
+            # 분포가 없으면 통계 기반으로 생성
+            if prediction_distribution is None:
+                self.logger.warning("LSTM 분포를 찾을 수 없어 통계 기반 분포 생성")
+                mean = lstm_prediction.raw_prediction
+                # uncertainty를 std로 사용
+                std = lstm_prediction.uncertainty if lstm_prediction.uncertainty else mean * 0.15
+                prediction_distribution = np.random.normal(mean, std, 1000)
+            
+            # 10kW 단위 최적화 실행
+            return self.optimize_contract_with_distribution(
+                station_id=station_id,
+                prediction_distribution=prediction_distribution,
+                current_contract_kw=current_contract_kw
+            )
+            
+        except Exception as e:
+            self.logger.error(f"LSTM 분포 기반 최적화 실패: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "station_id": station_id
+            }
+
+    def optimize_contract_with_distribution(
+        self,
+        station_id: str,
+        prediction_distribution: Any,  # np.ndarray
+        current_contract_kw: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        확률분포 기반 계약전력 최적화 (신규 메서드)
+        
+        Args:
+            station_id: 충전소 ID
+            prediction_distribution: 예측 피크 확률분포
+            current_contract_kw: 현재 계약전력
+            
+        Returns:
+            Dict: 최적화 결과 (10kW 단위)
+        """
+        try:
+            # 새로운 추천 엔진 사용
+            recommendation = self.recommendation_engine.generate_recommendation(
+                station_id=station_id,
+                prediction_distribution=prediction_distribution,
+                current_contract_kw=current_contract_kw
+            )
+            
+            # 레거시 포맷으로 변환 (하위 호환성)
+            result = self.recommendation_engine.to_dict(recommendation)
+            
+            # 추가 필드
+            result["method"] = "10kW_unit_optimization"
+            result["optimization_engine"] = "ContractOptimizer_v2"
+            
+            self.logger.info(
+                f"Station {station_id}: 10kW 단위 최적화 완료 - "
+                f"{recommendation.recommended_contract_kw}kW 추천"
+            )
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"최적화 실패: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "station_id": station_id
+            }
 
     def to_dict(self, analysis: ContractAnalysis) -> Dict[str, Any]:
         """분석 결과를 딕셔너리로 변환"""

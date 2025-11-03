@@ -1,6 +1,16 @@
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
-from ..dynamic_patterns import PatternFactors
+
+
+@dataclass
+class PatternFactors:
+    """Simplified pattern factors"""
+    seasonal_factor: float = 1.0
+    weekly_factor: float = 1.0
+    trend_factor: float = 1.0
+    confidence: float = 0.7
+    data_quality: str = "medium"
+    calculation_metadata: Dict[str, Any] = None
 
 
 @dataclass

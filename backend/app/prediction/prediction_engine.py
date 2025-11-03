@@ -1,13 +1,12 @@
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
+from dataclasses import dataclass
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-from functools import lru_cache
 import warnings
 
-from .dynamic_patterns import DynamicPatternAnalyzer, PatternFactors
 from .models.prediction_types import ModelPrediction, EnsemblePrediction
 from .models.extreme_value_models import ExtremeValueModels
 from .models.statistical_models import StatisticalModels
@@ -16,16 +15,23 @@ from .models.time_series_models import TimeSeriesModels
 warnings.filterwarnings("ignore")
 
 
+@dataclass
+class PatternFactors:
+    """Simplified pattern factors"""
+    seasonal_factor: float = 1.0
+    weekly_factor: float = 1.0
+    trend_factor: float = 1.0
+    confidence: float = 0.7
+    data_quality: str = "medium"
+    calculation_metadata: Dict[str, Any] = None
+
+
 class PredictionEngine:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.max_contract_power = 100  # 최대 계약 전력 100kW
         self.max_workers = 4  # 병렬 처리 스레드 수
         self._stats_cache = {}  # 기본 통계량 캐시
-        self._pattern_cache = {}  # Pattern analysis cache
-        
-        # Dynamic pattern analyzer
-        self.pattern_analyzer = DynamicPatternAnalyzer()
         
         # Model runners
         self.extreme_value_models = ExtremeValueModels()
@@ -60,22 +66,17 @@ class PredictionEngine:
 
         base_stats = self._stats_cache[cache_key]
         
-        # Dynamic pattern analysis (cached)
-        pattern_cache_key = f"{station_id}_{hash(str(data.index.tolist()))}"
-        if pattern_cache_key not in self._pattern_cache:
-            self._pattern_cache[pattern_cache_key] = self.pattern_analyzer.analyze_patterns(data, station_id)
-        
-        pattern_factors = self._pattern_cache[pattern_cache_key]
+        # Simplified pattern factors (no complex analysis)
+        pattern_factors = PatternFactors(
+            seasonal_factor=1.0,
+            weekly_factor=1.0,
+            trend_factor=1.0,
+            confidence=0.7,
+            data_quality="medium"
+        )
 
         # 모든 모델 실행
         model_predictions = []
-        
-        # Dynamic Pattern 기반 예측 추가
-        if pattern_factors and pattern_factors.confidence > 0.4:
-            pattern_prediction = self._dynamic_pattern_prediction(power_data, pattern_factors, base_stats)
-            if pattern_prediction:
-                model_predictions.append(pattern_prediction)
-                self.logger.info(f"Station {station_id}: Added dynamic pattern prediction (confidence: {pattern_factors.confidence:.2f})")
 
         try:
             # 병렬로 모든 모델 실행
@@ -186,50 +187,6 @@ class PredictionEngine:
                 "q25": 35.0, "q50": 45.0, "q75": 55.0, "q85": 60.0,
                 "q90": 65.0, "q95": 70.0, "q98": 75.0, "q99": 80.0
             }
-
-    def _dynamic_pattern_prediction(self, power_data: np.ndarray, pattern_factors: PatternFactors, 
-                                  base_stats: Dict[str, float]) -> Optional[ModelPrediction]:
-        """동적 패턴 분석을 활용한 예측."""
-        try:
-            # Base prediction from percentiles
-            base_prediction = base_stats["q95"]
-            
-            # Apply pattern adjustments
-            adjusted_prediction = base_prediction
-            
-            # Trend adjustment
-            if hasattr(pattern_factors, 'trend_factor'):
-                adjusted_prediction *= (1 + pattern_factors.trend_factor)
-            
-            # Seasonal adjustment
-            if hasattr(pattern_factors, 'seasonal_factor'):
-                adjusted_prediction *= pattern_factors.seasonal_factor
-                
-            # Confidence interval based on pattern uncertainty
-            uncertainty_factor = 1 - pattern_factors.confidence
-            ci_width = adjusted_prediction * uncertainty_factor * 0.5
-            
-            ci_lower = adjusted_prediction - ci_width
-            ci_upper = adjusted_prediction + ci_width
-
-            return ModelPrediction(
-                model_name="Dynamic_Pattern_Prediction",
-                predicted_value=float(adjusted_prediction),
-                confidence_interval=(float(ci_lower), float(ci_upper)),
-                confidence_score=pattern_factors.confidence,
-                method_details={
-                    "method": "Dynamic Pattern Analysis",
-                    "base_prediction": base_prediction,
-                    "pattern_confidence": pattern_factors.confidence,
-                    "trend_factor": getattr(pattern_factors, 'trend_factor', 0),
-                    "seasonal_factor": getattr(pattern_factors, 'seasonal_factor', 1),
-                    "description": "동적 패턴 분석을 활용한 예측",
-                },
-            )
-            
-        except Exception as e:
-            self.logger.debug(f"Dynamic pattern prediction failed: {e}")
-            return None
 
     def _ensemble_prediction(self, predictions: List[ModelPrediction], 
                            pattern_factors: Optional[PatternFactors] = None) -> EnsemblePrediction:

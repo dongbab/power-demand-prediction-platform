@@ -1,9 +1,19 @@
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, List, Optional
+from dataclasses import dataclass
 import logging
-from ..dynamic_patterns import PatternFactors
 from .prediction_types import ModelPrediction
+
+
+@dataclass
+class PatternFactors:
+    """Simplified pattern factors"""
+    seasonal_factor: float = 1.0
+    weekly_factor: float = 1.0
+    trend_factor: float = 1.0
+    confidence: float = 0.7
+    data_quality: str = "medium"
 
 
 class TimeSeriesModels:

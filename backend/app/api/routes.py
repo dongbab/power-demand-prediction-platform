@@ -2,6 +2,7 @@ from datetime import datetime
 import pandas as pd
 from pathlib import Path
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
@@ -642,6 +643,124 @@ async def analyze_station_contract(
     except Exception as e:
         logger.error(f"Error analyzing contract for {station_id}: {e}", exc_info=True)
         return {"success": False, "error": str(e), "station_id": station_id}
+
+
+@api_router.get("/stations/{station_id}/ensemble-prediction")
+async def get_ensemble_prediction(
+    station_id: str,
+    current_contract_kw: Optional[float] = None
+):
+    """
+    Phase 3: LSTM + XGBoost 앙상블 예측 및 계약 최적화
+    
+    특허 명세서 구현:
+    - LSTM: 시계열 패턴 학습 (Monte Carlo Dropout)
+    - XGBoost: 내부 특징 기반 예측
+    - 앙상블: 스테이션 성숙도 기반 동적 가중치
+    - 계약 최적화: KEPCO 요금 계산 + 절감액 분석
+    
+    Args:
+        station_id: 충전소 ID
+        current_contract_kw: 현재 계약 전력 (선택, 절감액 계산용)
+    
+    Returns:
+        앙상블 예측, 성숙도 분류, 계약 권고, 절감액 분석
+    """
+    try:
+        from ..prediction.ensemble_prediction_engine import EnsemblePredictionEngine
+        from ..contract import ContractOptimizer, RecommendationEngine
+        
+        # 데이터 로드
+        loader = ChargingDataLoader(station_id)
+        station_data = loader.load_historical_sessions(days=365)
+        
+        if station_data.empty:
+            return {
+                "success": False,
+                "error": "충전소 데이터가 없습니다.",
+                "station_id": station_id
+            }
+        
+        # 충전기 타입 판별
+        station_service = get_station_service()
+        charger_type = station_service._get_charger_type(station_data)
+        
+        # 앙상블 예측 엔진 초기화
+        ensemble_engine = EnsemblePredictionEngine()
+        
+        # 앙상블 예측 수행
+        prediction_result = ensemble_engine.predict_contract_power(
+            station_data=station_data,
+            station_id=station_id,
+            charger_type=charger_type
+        )
+        
+        # 계약 최적화
+        optimizer = ContractOptimizer(charger_type=charger_type)
+        contract_recommendation = optimizer.optimize_contract(
+            station_data=station_data,
+            predicted_peak_kw=prediction_result.final_prediction_kw,
+            uncertainty_kw=prediction_result.uncertainty_kw,
+            current_contract_kw=current_contract_kw
+        )
+        
+        # 권고안 변환
+        recommendation_engine = RecommendationEngine()
+        contract_dict = recommendation_engine.to_dict(contract_recommendation)
+        
+        # 응답 구성
+        result = {
+            "success": True,
+            "station_id": station_id,
+            "timestamp": datetime.now().isoformat(),
+            
+            # 앙상블 예측
+            "ensemble_prediction": {
+                "final_prediction_kw": round(prediction_result.final_prediction_kw, 2),
+                "uncertainty_kw": round(prediction_result.uncertainty_kw, 2),
+                "confidence_level": prediction_result.confidence_level,
+                
+                # 개별 모델 결과
+                "lstm": {
+                    "prediction_kw": round(prediction_result.lstm_prediction_kw, 2),
+                    "uncertainty_kw": round(prediction_result.lstm_uncertainty_kw, 2),
+                    "weight": prediction_result.maturity.lstm_weight
+                },
+                "xgboost": {
+                    "prediction_kw": round(prediction_result.xgboost_prediction_kw, 2),
+                    "uncertainty_kw": round(prediction_result.xgboost_uncertainty_kw, 2),
+                    "weight": prediction_result.maturity.xgboost_weight
+                },
+                
+                # 성숙도 분류
+                "maturity": {
+                    "level": prediction_result.maturity.maturity.value,
+                    "session_count": prediction_result.maturity.session_count,
+                    "reasoning": prediction_result.maturity.reasoning
+                }
+            },
+            
+            # 계약 권고
+            "contract_recommendation": contract_dict,
+            
+            # 메타데이터
+            "metadata": {
+                "charger_type": charger_type,
+                "data_sessions": len(station_data),
+                "model_version": "Phase3_v1.0"
+            }
+        }
+        
+        logger.info(f"Ensemble prediction completed for {station_id}: {prediction_result.final_prediction_kw:.2f}kW")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in ensemble prediction for {station_id}: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "station_id": station_id
+        }
 
 
 @api_router.post("/admin/refresh-cache")

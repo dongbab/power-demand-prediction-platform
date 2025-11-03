@@ -7,9 +7,20 @@ from pathlib import Path
 import pickle
 
 from .models.prediction_types import ModelPrediction, EnsemblePrediction
-from .dynamic_patterns import PatternFactors
 
 warnings.filterwarnings("ignore")
+
+# Simplified Pattern Factors
+from dataclasses import dataclass
+
+@dataclass
+class PatternFactors:
+    """Simplified pattern factors"""
+    seasonal_factor: float = 1.0
+    weekly_factor: float = 1.0
+    trend_factor: float = 1.0
+    confidence: float = 0.7
+    data_quality: str = "medium"
 
 try:
     import tensorflow as tf
@@ -185,7 +196,8 @@ class LSTMPredictionEngine:
     def _preprocess_data(self, data: pd.DataFrame) -> np.ndarray:
         """데이터 전처리"""
         try:
-            power_data = data["순간최고전력"].values
+            # 숫자 타입으로 변환 (날짜/시간 문제 방지)
+            power_data = pd.to_numeric(data["순간최고전력"], errors='coerce').values
 
             # 결측값 및 이상값 제거
             power_data = power_data[~np.isnan(power_data)]
@@ -205,7 +217,7 @@ class LSTMPredictionEngine:
             return power_data
 
         except Exception as e:
-            self.logger.error(f"Data preprocessing failed: {e}")
+            self.logger.error(f"Data preprocessing failed: {e}", exc_info=True)
             return np.array([])
 
     def _extract_features(self, data: pd.DataFrame, power_data: np.ndarray) -> np.ndarray:
@@ -221,51 +233,78 @@ class LSTMPredictionEngine:
         6. 이동평균 (rolling mean)
         """
         try:
-            # 시계열 인덱스가 있는지 확인
+            # DatetimeIndex가 없으면 충전시작일시 컬럼에서 생성
             if not isinstance(data.index, pd.DatetimeIndex):
-                # DatetimeIndex가 아니면 기본 특징만 사용
+                # 충전시작일시 컬럼 찾기
+                date_col = None
+                for col in ['충전시작일시', '충전완료일시', 'timestamp']:
+                    if col in data.columns:
+                        date_col = col
+                        break
+                
+                if date_col:
+                    # DatetimeIndex 설정
+                    data_copy = data.copy()
+                    data_copy[date_col] = pd.to_datetime(data_copy[date_col], errors='coerce')
+                    data_copy = data_copy.dropna(subset=[date_col])
+                    data_copy = data_copy.set_index(date_col)
+                    
+                    if len(data_copy) > 0:
+                        return self._extract_features_from_datetime_index(data_copy, power_data)
+                
+                # 날짜 정보가 없으면 기본 특징만 사용
+                self.logger.warning("No datetime information found, using basic features")
                 features = self._extract_basic_features(power_data)
                 return features
-
-            features_list = []
-
-            for i in range(len(data)):
-                timestamp = data.index[i]
-                power = power_data[i] if i < len(power_data) else 0
-
-                # 1. 정규화된 전력값
-                normalized_power = power / 100.0  # 0-100kW 범위를 0-1로
-
-                # 2. 시간 (주기적 인코딩: sin/cos)
-                hour = timestamp.hour
-                hour_sin = np.sin(2 * np.pi * hour / 24)
-                hour_cos = np.cos(2 * np.pi * hour / 24)
-
-                # 3. 요일 (주기적 인코딩)
-                weekday = timestamp.weekday()
-                weekday_sin = np.sin(2 * np.pi * weekday / 7)
-                weekday_cos = np.cos(2 * np.pi * weekday / 7)
-
-                # 4. 월 (주기적 인코딩)
-                month = timestamp.month
-                month_sin = np.sin(2 * np.pi * month / 12)
-
-                features = [
-                    normalized_power,
-                    hour_sin,
-                    weekday_sin,
-                    month_sin,
-                    hour_cos,  # 추가 시간 정보
-                    weekday_cos  # 추가 요일 정보
-                ]
-
-                features_list.append(features)
-
-            return np.array(features_list)
+            
+            # DatetimeIndex가 있으면 정상 처리
+            return self._extract_features_from_datetime_index(data, power_data)
 
         except Exception as e:
-            self.logger.error(f"Feature extraction failed: {e}")
+            self.logger.error(f"Feature extraction failed: {e}", exc_info=True)
             return self._extract_basic_features(power_data)
+    
+    def _extract_features_from_datetime_index(
+        self, 
+        data: pd.DataFrame, 
+        power_data: np.ndarray
+    ) -> np.ndarray:
+        """DatetimeIndex가 있는 데이터에서 특징 추출"""
+        features_list = []
+
+        for i in range(len(data)):
+            timestamp = data.index[i]
+            power = power_data[i] if i < len(power_data) else 0
+
+            # 1. 정규화된 전력값
+            normalized_power = power / 100.0  # 0-100kW 범위를 0-1로
+
+            # 2. 시간 (주기적 인코딩: sin/cos)
+            hour = timestamp.hour
+            hour_sin = np.sin(2 * np.pi * hour / 24)
+            hour_cos = np.cos(2 * np.pi * hour / 24)
+
+            # 3. 요일 (주기적 인코딩)
+            weekday = timestamp.weekday()
+            weekday_sin = np.sin(2 * np.pi * weekday / 7)
+            weekday_cos = np.cos(2 * np.pi * weekday / 7)
+
+            # 4. 월 (주기적 인코딩)
+            month = timestamp.month
+            month_sin = np.sin(2 * np.pi * month / 12)
+
+            features = [
+                normalized_power,
+                hour_sin,
+                weekday_sin,
+                month_sin,
+                hour_cos,  # 추가 시간 정보
+                weekday_cos  # 추가 요일 정보
+            ]
+
+            features_list.append(features)
+
+        return np.array(features_list)
 
     def _extract_basic_features(self, power_data: np.ndarray) -> np.ndarray:
         """기본 특징 추출 (시간 정보가 없을 때)"""
@@ -299,46 +338,101 @@ class LSTMPredictionEngine:
 
         return np.array(X), np.array(y)
 
-    def _lstm_predict(self, data: pd.DataFrame, power_data: np.ndarray) -> EnsemblePrediction:
-        """LSTM 모델을 사용한 예측"""
+    def predict_with_uncertainty(
+        self,
+        data: pd.DataFrame,
+        power_data: np.ndarray,
+        n_iterations: int = 1000
+    ) -> np.ndarray:
+        """
+        Monte Carlo Dropout을 사용한 불확실성 추정
+        
+        Args:
+            data: 입력 데이터프레임
+            power_data: 전력 데이터
+            n_iterations: Monte Carlo 시뮬레이션 반복 횟수
+            
+        Returns:
+            np.ndarray: 예측 분포 (shape: (n_iterations,))
+        """
         try:
             # 특징 추출
             features = self._extract_features(data, power_data)
-
+            
             if len(features) < self.sequence_length:
-                return self._statistical_fallback(power_data)
-
+                # 데이터 부족 시 통계 기반 분포 생성
+                mean = np.mean(power_data)
+                std = np.std(power_data)
+                return np.random.normal(mean, std, n_iterations)
+            
             # 마지막 시퀀스로 예측
             last_sequence = features[-self.sequence_length:].reshape(
                 1, self.sequence_length, self.feature_dim
             )
+            
+            predictions = []
+            
+            # Monte Carlo Dropout: training=True로 설정하여 Dropout 활성화
+            for _ in range(n_iterations):
+                # training=True로 설정하면 dropout이 계속 활성화됨
+                pred = self.model(last_sequence, training=True)
+                pred_value = float(pred[0][0]) * 100.0  # denormalize
+                predictions.append(pred_value)
+            
+            return np.array(predictions)
+            
+        except Exception as e:
+            self.logger.error(f"Monte Carlo prediction failed: {e}")
+            # 폴백: 통계 기반 분포
+            mean = np.mean(power_data)
+            std = np.std(power_data)
+            return np.random.normal(mean, std, n_iterations)
 
-            # 예측 수행
-            prediction = self.model.predict(last_sequence, verbose=0)[0][0]
-            prediction = prediction * 100.0  # denormalize (0-1 -> 0-100kW)
-
-            # 신뢰구간 계산 (예측의 불확실성)
-            # 최근 데이터의 표준편차를 사용
-            recent_std = np.std(power_data[-50:]) if len(power_data) >= 50 else np.std(power_data)
-            ci_lower = max(0, prediction - 1.96 * recent_std)
-            ci_upper = min(100, prediction + 1.96 * recent_std)
+    def _lstm_predict(self, data: pd.DataFrame, power_data: np.ndarray) -> EnsemblePrediction:
+        """LSTM 모델을 사용한 예측 (Monte Carlo Dropout 포함)"""
+        try:
+            # Monte Carlo Dropout으로 확률분포 생성
+            prediction_distribution = self.predict_with_uncertainty(
+                data, power_data, n_iterations=1000
+            )
+            
+            # 분포 통계 계산
+            prediction = np.mean(prediction_distribution)
+            ci_lower = np.percentile(prediction_distribution, 2.5)
+            ci_upper = np.percentile(prediction_distribution, 97.5)
+            
+            # 분포 정보를 method_details에 저장
+            distribution_stats = {
+                "mean": float(np.mean(prediction_distribution)),
+                "std": float(np.std(prediction_distribution)),
+                "min": float(np.min(prediction_distribution)),
+                "max": float(np.max(prediction_distribution)),
+                "p10": float(np.percentile(prediction_distribution, 10)),
+                "p50": float(np.percentile(prediction_distribution, 50)),
+                "p90": float(np.percentile(prediction_distribution, 90)),
+                "p95": float(np.percentile(prediction_distribution, 95)),
+                "p99": float(np.percentile(prediction_distribution, 99)),
+            }
 
             # 기본 통계 계산
             base_stats = self._compute_base_statistics(power_data)
 
-            # 모델 예측 객체 생성
+            # 모델 예측 객체 생성 (Monte Carlo Dropout 적용)
             lstm_model_prediction = ModelPrediction(
                 model_name="LSTM_Deep_Learning",
                 predicted_value=float(prediction),
                 confidence_interval=(float(ci_lower), float(ci_upper)),
                 confidence_score=0.85,  # LSTM은 높은 신뢰도
                 method_details={
-                    "method": "LSTM Deep Learning",
+                    "method": "LSTM Deep Learning with Monte Carlo Dropout",
                     "sequence_length": self.sequence_length,
                     "feature_dim": self.feature_dim,
-                    "description": "LSTM 딥러닝 기반 시계열 예측",
+                    "monte_carlo_iterations": 1000,
+                    "description": "LSTM 딥러닝 + Monte Carlo Dropout 불확실성 추정",
                     "data_points_used": len(power_data),
-                    "percentile_95_comparison": base_stats["q95"]
+                    "percentile_95_comparison": base_stats["q95"],
+                    "distribution": distribution_stats,
+                    "prediction_distribution": prediction_distribution.tolist()  # 전체 분포 저장
                 }
             )
 

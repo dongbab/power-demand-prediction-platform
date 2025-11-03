@@ -67,6 +67,20 @@ export const apiService = {
                 stationId
             )}/monthly-contract?year=${year}&month=${month}&mode=${mode}&round_kw=${roundKw}`
         ),
+    // Phase 3: 앙상블 예측 API
+    getEnsemblePrediction: (
+        stationId: string,
+        currentContractKw?: number
+    ) => {
+        const params = new URLSearchParams();
+        if (currentContractKw !== undefined) {
+            params.set("current_contract_kw", String(currentContractKw));
+        }
+        const qs = params.toString();
+        return api.get(
+            `/stations/${encodeURIComponent(stationId)}/ensemble-prediction${qs ? `?${qs}` : ""}`
+        );
+    },
     uploadCsv: (file: File) => {
         const form = new FormData();
         form.append("file", file);

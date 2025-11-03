@@ -5,13 +5,11 @@ import logging
 
 from .loader import ChargingDataLoader
 from ..models.entities import ChargingStation, ChargingSession
-from ..models.validators import ChargingDataValidator
 
 
 class ChargingDataRepository:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.validator = ChargingDataValidator()
         self._station_cache: Optional[Dict[str, ChargingStation]] = None
         self._cache_timestamp: Optional[datetime] = None
         self._cache_expire_minutes = 30

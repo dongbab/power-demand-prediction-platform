@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .lstm_prediction_engine import LSTMPredictionEngine
 from .prediction_engine import PredictionEngine
+from .ensemble_prediction_engine import EnsemblePredictionEngine
 
 logger = logging.getLogger(__name__)
 
@@ -23,22 +24,43 @@ class PredictionEngineFactory:
 
     _lstm_engine: Optional[LSTMPredictionEngine] = None
     _traditional_engine: Optional[PredictionEngine] = None
+    _ensemble_engine: Optional[EnsemblePredictionEngine] = None
     _use_lstm: bool = False
+    _use_ensemble: bool = False
     _model_path: Optional[str] = None
 
     @classmethod
-    def initialize(cls, use_lstm: bool = False, model_path: str = "models/lstm_model"):
+    def initialize(cls, use_lstm: bool = False, use_ensemble: bool = False, model_path: str = "models/lstm_model"):
         """
         팩토리 초기화 (앱 시작 시 한 번만 호출)
 
         Args:
             use_lstm: LSTM 모델 사용 여부
+            use_ensemble: 앙상블 모델 사용 여부 (LSTM + XGBoost)
             model_path: LSTM 모델 경로
         """
         cls._use_lstm = use_lstm
+        cls._use_ensemble = use_ensemble
         cls._model_path = model_path
 
-        if use_lstm:
+        # 앙상블 모드 (최우선)
+        if use_ensemble:
+            logger.info("Initializing Ensemble prediction engine (LSTM + XGBoost)...")
+            try:
+                cls._ensemble_engine = EnsemblePredictionEngine(
+                    lstm_model_path="app/prediction/models/lstm_trained",
+                    xgboost_model_path="app/prediction/models/xgboost_trained",
+                    use_dynamic_weights=True
+                )
+                logger.info("✓ Ensemble engine initialized (LSTM + XGBoost)")
+            except Exception as e:
+                logger.error(f"Failed to initialize Ensemble engine: {e}")
+                logger.info("Falling back to LSTM-only mode")
+                cls._use_ensemble = False
+                cls._use_lstm = True
+        
+        # LSTM 단독 모드
+        if use_lstm and not use_ensemble:
             logger.info("Initializing LSTM prediction engine...")
             try:
                 # 모델 파일 존재 여부 확인
@@ -66,15 +88,20 @@ class PredictionEngineFactory:
         예측 엔진 인스턴스 반환 (캐시된 인스턴스)
 
         Returns:
-            LSTMPredictionEngine 또는 PredictionEngine
+            EnsemblePredictionEngine, LSTMPredictionEngine 또는 PredictionEngine
         """
         # 초기화되지 않았으면 기본 설정으로 초기화
-        if cls._lstm_engine is None and cls._traditional_engine is None:
+        if cls._lstm_engine is None and cls._traditional_engine is None and cls._ensemble_engine is None:
             logger.warning("Engine not initialized, using default initialization")
-            cls.initialize(use_lstm=False)
+            cls.initialize(use_lstm=False, use_ensemble=False)
 
-        if cls._use_lstm and cls._lstm_engine is not None:
+        # 앙상블 모드 우선
+        if cls._use_ensemble and cls._ensemble_engine is not None:
+            return cls._ensemble_engine
+        # LSTM 모드
+        elif cls._use_lstm and cls._lstm_engine is not None:
             return cls._lstm_engine
+        # 전통적 모드
         else:
             if cls._traditional_engine is None:
                 cls._traditional_engine = PredictionEngine()
@@ -133,6 +160,24 @@ class PredictionEngineFactory:
             return {"success": True, "message": "Traditional engine reloaded"}
 
     @classmethod
+    def switch_to_ensemble(cls):
+        """앙상블 모델로 전환 (런타임 중 전환)"""
+        logger.info("Switching to Ensemble engine (LSTM + XGBoost)")
+        try:
+            cls._ensemble_engine = EnsemblePredictionEngine(
+                lstm_model_path="app/prediction/models/lstm_trained",
+                xgboost_model_path="app/prediction/models/xgboost_trained",
+                use_dynamic_weights=True
+            )
+            cls._use_ensemble = True
+            cls._use_lstm = False
+            logger.info("✓ Switched to Ensemble engine")
+            return {"success": True, "message": "Switched to Ensemble engine"}
+        except Exception as e:
+            logger.error(f"Failed to switch to Ensemble: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @classmethod
     def get_info(cls) -> dict:
         """
         현재 엔진 정보 반환
@@ -140,8 +185,10 @@ class PredictionEngineFactory:
         Returns:
             Dict with engine information
         """
+        engine_type = "Ensemble" if cls._use_ensemble else ("LSTM" if cls._use_lstm else "Traditional")
         return {
-            "engine_type": "LSTM" if cls._use_lstm else "Traditional",
+            "engine_type": engine_type,
+            "ensemble_initialized": cls._ensemble_engine is not None,
             "lstm_initialized": cls._lstm_engine is not None,
             "traditional_initialized": cls._traditional_engine is not None,
             "model_path": cls._model_path if cls._use_lstm else None,
@@ -163,7 +210,7 @@ def get_prediction_engine():
     return PredictionEngineFactory.get_engine()
 
 
-def initialize_prediction_engine(use_lstm: bool = False, model_path: str = "models/lstm_model"):
+def initialize_prediction_engine(use_lstm: bool = False, use_ensemble: bool = False, model_path: str = "models/lstm_model"):
     """
     예측 엔진 초기화 (앱 시작 시 호출)
 
@@ -172,8 +219,8 @@ def initialize_prediction_engine(use_lstm: bool = False, model_path: str = "mode
 
         @asynccontextmanager
         async def lifespan(app: FastAPI):
-            # 앱 시작 시 LSTM 모델 미리 로드
-            initialize_prediction_engine(use_lstm=True, model_path="models/lstm_model")
+            # 앱 시작 시 앙상블 모델 미리 로드
+            initialize_prediction_engine(use_ensemble=True)
             yield
     """
-    PredictionEngineFactory.initialize(use_lstm=use_lstm, model_path=model_path)
+    PredictionEngineFactory.initialize(use_lstm=use_lstm, use_ensemble=use_ensemble, model_path=model_path)
