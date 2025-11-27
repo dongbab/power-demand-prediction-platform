@@ -10,8 +10,7 @@
 import logging
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, Literal
+from typing import Dict, Any, Optional, Tuple, Literal, List
 from dataclasses import dataclass
 from enum import Enum
 
@@ -62,6 +61,11 @@ class EnsemblePrediction:
     # 메타 정보
     ensemble_method: Literal["weighted_average", "lstm_only", "xgboost_only"]
     confidence_score: float  # 0-1
+    
+    @property
+    def confidence_level(self) -> float:
+        """Backward compatibility: confidence_level -> confidence_score"""
+        return self.confidence_score
 
 
 class EnsemblePredictionEngine:
@@ -180,6 +184,7 @@ class EnsemblePredictionEngine:
         self,
         station_data: pd.DataFrame,
         station_id: str,
+        charger_type: Optional[str] = None,
         n_iterations: int = 1000,
         manual_weights: Optional[Tuple[float, float]] = None
     ) -> EnsemblePrediction:
@@ -189,6 +194,7 @@ class EnsemblePredictionEngine:
         Args:
             station_data: 충전소 데이터
             station_id: 충전소 ID
+            charger_type: 충전기 타입 (완속/급속)
             n_iterations: Monte Carlo 반복 횟수
             manual_weights: 수동 가중치 (lstm_weight, xgboost_weight)
             
@@ -213,7 +219,8 @@ class EnsemblePredictionEngine:
                     # LSTM 예측 - predict_contract_power 사용
                     lstm_result = self.lstm_engine.predict_contract_power(
                         data=station_data,
-                        station_id=station_id
+                        station_id=station_id,
+                        charger_type=charger_type
                     )
                     
                     # EnsemblePrediction 객체에서 값 추출
@@ -266,7 +273,8 @@ class EnsemblePredictionEngine:
                 try:
                     xgb_result = self.xgboost_engine.predict_contract_power(
                         data=station_data,
-                        station_id=station_id
+                        station_id=station_id,
+                        charger_type=charger_type
                     )
                     
                     # EnsemblePrediction 객체에서 값 추출
@@ -403,6 +411,96 @@ class EnsemblePredictionEngine:
             self.logger.error("Both distributions unavailable, using fallback")
             # 기본값으로 정규분포 생성
             return np.random.normal(50, 15, n_samples)
+
+    def predict_session_series(
+        self,
+        station_data: pd.DataFrame,
+        station_id: str,
+        charger_type: Optional[str] = None,
+        max_points: int = 1600
+    ) -> List[Dict[str, Any]]:
+        """세션 단위 예측 시계열 생성"""
+        if station_data is None or station_data.empty:
+            return []
+
+        if self.lstm_engine:
+            try:
+                lstm_series = self.lstm_engine.predict_session_series(
+                    data=station_data,
+                    station_id=station_id,
+                    max_points=max_points,
+                    charger_type=charger_type
+                )
+                if lstm_series:
+                    return lstm_series
+            except Exception as exc:
+                self.logger.warning(
+                    "LSTM session prediction failed for %s: %s",
+                    station_id,
+                    exc,
+                    exc_info=True
+                )
+
+        return self._statistical_session_series(station_data, max_points=max_points)
+
+    def _statistical_session_series(
+        self,
+        station_data: pd.DataFrame,
+        max_points: int = 1600,
+        window: int = 24
+    ) -> List[Dict[str, Any]]:
+        power_col = None
+        for candidate in ["순간최고전력", "순간 최고 전력", "max_power", "전력"]:
+            if candidate in station_data.columns:
+                power_col = candidate
+                break
+
+        if power_col is None:
+            return []
+
+        df = station_data[[power_col]].copy()
+        df.rename(columns={power_col: "peak_kw"}, inplace=True)
+
+        time_col = None
+        for candidate in [
+            "충전시작일시",
+            "충전완료일시",
+            "timestamp",
+            "측정일시",
+            "date",
+            "created_at"
+        ]:
+            if candidate in station_data.columns:
+                time_col = candidate
+                break
+
+        if time_col:
+            df["timestamp"] = pd.to_datetime(station_data[time_col], errors="coerce")
+            df = df.dropna(subset=["timestamp", "peak_kw"])
+            df = df.sort_values("timestamp").set_index("timestamp")
+        elif isinstance(station_data.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(station_data.index, errors="coerce")
+            df = df.dropna(subset=["peak_kw"]).sort_index()
+        else:
+            return []
+
+        if df.empty:
+            return []
+
+        if len(df) > max_points:
+            df = df.iloc[-max_points:]
+
+        rolling = df["peak_kw"].rolling(window=window, min_periods=1).mean()
+        series: List[Dict[str, Any]] = []
+        for ts, value in rolling.items():
+            if pd.isna(ts) or pd.isna(value):
+                continue
+            series.append({
+                "timestamp": pd.Timestamp(ts).isoformat(),
+                "predicted_peak_kw": round(float(value), 2),
+                "method": "rolling_mean"
+            })
+        return series
     
     def _calculate_confidence(
         self,

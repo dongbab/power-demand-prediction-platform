@@ -227,7 +227,6 @@
     }
 
 
-    $: prediction = $stationData.prediction;
     $: analysis = $stationData.analysis;
     $: monthlyContract = $stationData.monthlyContract;
 </script>
@@ -454,8 +453,6 @@
                 <div class="prediction-box-content">
                     <PeakPowerPredictor
                         {stationId}
-                        {prediction}
-                        {analysis}
                         {monthlyContract}
                     />
                 </div>
@@ -1254,26 +1251,6 @@
         color: var(--text-secondary);
     }
 
-    .status-indicator {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 16px;
-        background: rgba(16, 185, 129, 0.1);
-        border-radius: 20px;
-        font-size: 0.85em;
-        font-weight: 600;
-        color: #10b981;
-    }
-
-    .status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: #10b981;
-        animation: pulse 2s infinite;
-    }
-
     .action-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -1402,84 +1379,6 @@
     .action-card.primary .action-btn:hover:not(:disabled) {
         background: rgba(255, 255, 255, 0.3);
         border-color: rgba(255, 255, 255, 0.5);
-    }
-
-    .info-banner {
-        display: flex;
-        align-items: center;
-        gap: 20px;
-        background: linear-gradient(
-            135deg,
-            var(--neutral-light) 0%,
-            var(--bg-tertiary) 100%
-        );
-        border: 1px solid var(--border-color);
-        border-radius: 16px;
-        padding: 24px;
-        margin-bottom: 24px;
-        transition:
-            background 0.3s ease,
-            border-color 0.3s ease;
-    }
-
-    .banner-icon {
-        width: 48px;
-        height: 48px;
-        background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        flex-shrink: 0;
-    }
-
-    .banner-icon svg {
-        width: 24px;
-        height: 24px;
-        stroke-width: 2;
-    }
-
-    .banner-content {
-        flex: 1;
-    }
-
-    .banner-title {
-        font-size: 1.1em;
-        font-weight: 700;
-        color: var(--primary-color);
-        margin-bottom: 12px;
-    }
-
-    .banner-stats {
-        display: flex;
-        align-items: center;
-        gap: 16px;
-        flex-wrap: wrap;
-    }
-
-    .stat-item {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-
-    .stat-label {
-        font-size: 0.8em;
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-
-    .stat-value {
-        font-size: 1.2em;
-        font-weight: 700;
-        color: var(--primary-color);
-    }
-
-    .stat-divider {
-        width: 1px;
-        height: 32px;
-        background: var(--border-color);
     }
 
     .results-modal {
@@ -1688,18 +1587,6 @@
             min-width: 120px;
         }
 
-        .control-panel {
-            padding: 24px;
-        }
-
-        .button-group {
-            gap: 12px;
-        }
-
-        .btn {
-            flex: none;
-            min-width: 160px;
-        }
     }
 
     /* Desktop Layout */
@@ -1773,13 +1660,6 @@
             min-width: 140px;
         }
 
-        .control-panel {
-            padding: 32px;
-        }
-
-        .button-group {
-            gap: 16px;
-        }
     }
 
     /* Large Desktop Layout */
@@ -1847,19 +1727,6 @@
         .control-dashboard .action-btn {
             width: 100%;
             height: auto;
-        }
-    }
-
-    /* 배너: 모바일 랩, 데스크톱 단일 행 + 구분선 표시 */
-    .info-banner .banner-stats .stat-divider {
-        display: none;
-    }
-    @media (min-width: 1024px) {
-        .info-banner .banner-stats {
-            flex-wrap: nowrap;
-        }
-        .info-banner .banner-stats .stat-divider {
-            display: block;
         }
     }
 

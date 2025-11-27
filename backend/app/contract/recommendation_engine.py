@@ -49,6 +49,9 @@ class ContractRecommendation:
     # 시각화 데이터
     cost_comparison_data: Dict[str, Any]
     candidate_analysis_data: List[Dict[str, Any]]
+    
+    # 최적화 상세 데이터 (시각화용)
+    optimization_details: Optional[Dict[str, Any]] = None
 
 
 class RecommendationEngine:
@@ -68,6 +71,9 @@ class RecommendationEngine:
         station_id: str,
         prediction_distribution: Any,  # np.ndarray
         current_contract_kw: Optional[int] = None,
+        historical_peak_series: Optional[List[Dict[str, Any]]] = None,
+        session_power_series: Optional[List[Dict[str, Any]]] = None,
+        session_prediction_series: Optional[List[Dict[str, Any]]] = None,
         **optimizer_kwargs
     ) -> ContractRecommendation:
         """
@@ -119,6 +125,15 @@ class RecommendationEngine:
             optimization.all_candidates
         )
         
+        # 6. 최적화 상세 데이터 (시각화용)
+        optimization_details = self._prepare_optimization_details(
+            optimization,
+            prediction_distribution,
+            historical_peak_series,
+            session_power_series,
+            session_prediction_series
+        )
+        
         recommendation = ContractRecommendation(
             station_id=station_id,
             analysis_date=datetime.now().isoformat(),
@@ -137,7 +152,8 @@ class RecommendationEngine:
             action_required=action_required,
             urgency_level=urgency,
             cost_comparison_data=cost_comparison,
-            candidate_analysis_data=candidate_analysis
+            candidate_analysis_data=candidate_analysis,
+            optimization_details=optimization_details
         )
         
         self.logger.info(
@@ -198,7 +214,7 @@ class RecommendationEngine:
         
         # 6. 10kW 단위 최적화 강조
         reasons.append(
-            f"🎯 10kW 단위 미세 조정으로 비용 최적화 달성"
+            "🎯 10kW 단위 미세 조정으로 비용 최적화 달성"
         )
         
         return reasons
@@ -277,6 +293,143 @@ class RecommendationEngine:
             }
             for c in sorted(candidates, key=lambda x: x.contract_kw)
         ]
+    
+    def _prepare_optimization_details(
+        self,
+        optimization: OptimizationResult,
+        distribution: Any,
+        historical_peaks: Optional[List[Dict[str, Any]]] = None,
+        session_series: Optional[List[Dict[str, Any]]] = None,
+        session_prediction_series: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """최적화 상세 데이터 준비 (시각화용)"""
+        import numpy as np
+        shortfall_simulations = self._build_shortfall_simulations(
+            optimization.all_candidates,
+            distribution,
+            historical_peaks
+        )
+
+        return {
+            "optimal_contract_kw": optimization.optimal_contract_kw,
+            "current_contract_kw": optimization.current_contract_kw,
+            "optimal_candidate": {
+                "contract_kw": optimization.optimal_candidate.contract_kw,
+                "expected_annual_cost": optimization.optimal_candidate.expected_annual_cost,
+                "overage_probability": optimization.optimal_candidate.overage_probability,
+                "waste_probability": optimization.optimal_candidate.waste_probability,
+                "risk_score": optimization.optimal_candidate.risk_score
+            },
+            "all_candidates": [
+                {
+                    "contract_kw": c.contract_kw,
+                    "expected_annual_cost": c.expected_annual_cost,
+                    "overage_probability": c.overage_probability,
+                    "waste_probability": c.waste_probability,
+                    "cost_std": c.cost_std,
+                    "risk_score": c.risk_score
+                }
+                for c in sorted(optimization.all_candidates, key=lambda x: x.contract_kw)
+            ],
+            "prediction_distribution": distribution.tolist() if hasattr(distribution, 'tolist') else list(distribution),
+            "distribution_stats": {
+                "mean": float(np.mean(distribution)),
+                "std": float(np.std(distribution)),
+                "q5": float(np.percentile(distribution, 5)),
+                "q50": float(np.percentile(distribution, 50)),
+                "q95": float(np.percentile(distribution, 95)),
+                "min": float(np.min(distribution)),
+                "max": float(np.max(distribution))
+            },
+            "expected_savings": optimization.expected_savings,
+            "savings_percent": optimization.savings_percent,
+            "daily_peak_series": historical_peaks or [],
+            "session_power_series": session_series or [],
+            "session_prediction_series": session_prediction_series or [],
+            "contract_shortfall_simulations": shortfall_simulations
+        }
+
+    def _build_shortfall_simulations(
+        self,
+        candidates: List[Any],
+        distribution: Any,
+        historical_peaks: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
+        """LSTM 기반 과소 계약 시뮬레이션 데이터 생성"""
+        import numpy as np
+
+        try:
+            dist_array = np.asarray(distribution, dtype=float)
+        except Exception:
+            return []
+
+        if dist_array.size == 0 or not candidates:
+            return []
+
+        hist_points: List[Dict[str, Any]] = []
+        if isinstance(historical_peaks, list):
+            for entry in historical_peaks:
+                date_value = entry.get("date") or entry.get("day") or entry.get("timestamp")
+                peak_value = entry.get("peak_kw") or entry.get("peakKw") or entry.get("value")
+                if not date_value:
+                    continue
+                try:
+                    peak_float = float(peak_value)
+                except (TypeError, ValueError):
+                    continue
+                hist_points.append({
+                    "date": str(date_value),
+                    "peak_kw": peak_float
+                })
+
+        # 최근 데이터 위주로 최대 120일치만 사용
+        if hist_points:
+            hist_points = sorted(hist_points, key=lambda item: item["date"])[-120:]
+
+        simulations: List[Dict[str, Any]] = []
+
+        for candidate in sorted(candidates, key=lambda item: item.contract_kw):
+            contract_kw = float(getattr(candidate, "contract_kw", 0))
+            if contract_kw <= 0:
+                continue
+
+            overshoot_samples = dist_array - contract_kw
+            positive_samples = overshoot_samples[overshoot_samples > 0]
+            overshoot_probability = float(
+                (positive_samples.size / dist_array.size) * 100
+            ) if dist_array.size else 0.0
+
+            expected_overshoot_kw = float(positive_samples.mean()) if positive_samples.size else 0.0
+            p90_overshoot_kw = float(np.percentile(positive_samples, 90)) if positive_samples.size else 0.0
+
+            daily_projection: List[Dict[str, Any]] = []
+            overshoot_target = p90_overshoot_kw or expected_overshoot_kw
+
+            if hist_points:
+                margin = max(contract_kw * 0.2, 5.0)
+                for point in hist_points:
+                    historical_peak = float(point["peak_kw"])
+                    risk_factor = max(0.0, min(1.0, (historical_peak - contract_kw) / margin))
+                    simulated_peak = contract_kw + overshoot_target * risk_factor
+                    daily_projection.append({
+                        "date": point["date"],
+                        "historical_peak_kw": round(historical_peak, 2),
+                        "simulated_peak_kw": round(simulated_peak, 2),
+                        "overshoot_kw": round(max(0.0, simulated_peak - contract_kw), 2),
+                        "risk_factor": round(risk_factor, 3)
+                    })
+
+            simulations.append({
+                "contract_kw": int(contract_kw),
+                "overshoot_probability": round(overshoot_probability, 2),
+                "expected_overshoot_kw": round(expected_overshoot_kw, 2),
+                "p90_overshoot_kw": round(p90_overshoot_kw, 2),
+                "model_source": "lstm_mc_dropout",
+                "updated_at": datetime.now().isoformat(),
+                "daily_projection": daily_projection
+            })
+
+        return simulations
     
     def to_dict(self, recommendation: ContractRecommendation) -> Dict[str, Any]:
         """추천 결과를 딕셔너리로 변환 (API 응답용)"""

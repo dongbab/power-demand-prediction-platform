@@ -25,6 +25,7 @@ class ContractCandidate:
 
 
 @dataclass
+@dataclass
 class OptimizationResult:
     """최적화 결과"""
     optimal_contract_kw: int  # 최적 계약전력
@@ -47,6 +48,16 @@ class OptimizationResult:
     # 추천 사유
     recommendation_reason: str
     decision_factors: Dict[str, Any]
+    
+    @property
+    def expected_annual_savings(self) -> Optional[float]:
+        """expected_savings의 별칭 (하위 호환성)"""
+        return self.expected_savings
+    
+    @property
+    def recommendation_summary(self) -> str:
+        """recommendation_reason의 별칭 (하위 호환성)"""
+        return self.recommendation_reason
 
 
 class ContractOptimizer:
@@ -54,7 +65,7 @@ class ContractOptimizer:
     계약전력 최적화 엔진
     
     핵심 알고리즘:
-    1. 10kW 단위 후보 생성 (예측분포 기준 ±30kW 범위)
+    1. 10kW 단위 후보 생성 (예측분포 분위수 범위 기반)
     2. 각 후보별 Monte Carlo 시뮬레이션 (1,000회)
     3. 비용 기댓값 계산 및 리스크 평가
     4. 비용 최소화 + 리스크 균형 최적화
@@ -63,20 +74,26 @@ class ContractOptimizer:
     def __init__(
         self,
         cost_calculator: Optional[KEPCOCostCalculator] = None,
-        candidate_step: int = 10  # 10kW 단위
+        candidate_step: int = 10,  # 10kW 단위
+        charger_type: Optional[str] = None
     ):
         """
         Args:
             cost_calculator: 비용 계산기 (기본값: 새 인스턴스)
             candidate_step: 후보 간격 (kW) - 기본 10kW
+            charger_type: 충전기 타입 (완속/급속)
         """
         self.cost_calculator = cost_calculator or KEPCOCostCalculator()
         self.candidate_step = candidate_step
+        self.charger_type = charger_type
         self.logger = logging.getLogger(__name__)
         
     def optimize_contract(
         self,
-        prediction_distribution: np.ndarray,
+        prediction_distribution: Optional[np.ndarray] = None,
+        station_data: Optional[Any] = None,
+        predicted_peak_kw: Optional[float] = None,
+        uncertainty_kw: Optional[float] = None,
         current_contract_kw: Optional[int] = None,
         min_contract_kw: int = 10,
         max_contract_kw: int = 200,
@@ -87,6 +104,9 @@ class ContractOptimizer:
         
         Args:
             prediction_distribution: 예측 피크 확률분포 (np.ndarray, 예: 1,000개 샘플)
+            station_data: 충전소 데이터 (선택사항, 미사용 파라미터 - 하위 호환성)
+            predicted_peak_kw: 예측 피크 전력 (kW)
+            uncertainty_kw: 불확실성 (kW)
             current_contract_kw: 현재 계약전력 (선택사항)
             min_contract_kw: 최소 계약전력
             max_contract_kw: 최대 계약전력
@@ -95,6 +115,19 @@ class ContractOptimizer:
         Returns:
             OptimizationResult: 최적화 결과
         """
+        # prediction_distribution이 없으면 predicted_peak_kw와 uncertainty_kw로 생성
+        if prediction_distribution is None:
+            if predicted_peak_kw is None or uncertainty_kw is None:
+                raise ValueError(
+                    "Either prediction_distribution or (predicted_peak_kw, uncertainty_kw) must be provided"
+                )
+            # 정규분포로 근사 (1000개 샘플)
+            prediction_distribution = np.random.normal(
+                predicted_peak_kw,
+                uncertainty_kw,
+                1000
+            )
+        
         self.logger.info(
             f"계약전력 최적화 시작: 분포 크기={len(prediction_distribution)}, "
             f"현재 계약={current_contract_kw}kW, 리스크 허용도={risk_tolerance}"
@@ -178,20 +211,33 @@ class ContractOptimizer:
         min_kw: int,
         max_kw: int
     ) -> Tuple[int, int]:
-        """후보 범위 결정 (예측분포 기준 ±30kW)"""
-        # 10th ~ 99th percentile 기준
-        p10 = np.percentile(distribution, 10)
-        p99 = np.percentile(distribution, 99)
+        """후보 범위 결정 (예측분포 중심 범위)"""
+        # 5th ~ 95th percentile 기준으로 실제 데이터 범위만 사용
+        p_low = np.percentile(distribution, 5)
+        p_high = np.percentile(distribution, 95)
         
-        # ±30kW 여유 추가
-        range_min = max(min_kw, int(np.floor((p10 - 30) / self.candidate_step)) * self.candidate_step)
-        range_max = min(max_kw, int(np.ceil((p99 + 30) / self.candidate_step)) * self.candidate_step)
+        range_min = max(
+            min_kw,
+            int(np.floor(p_low / self.candidate_step)) * self.candidate_step
+        )
+        range_max = min(
+            max_kw,
+            int(np.ceil(p_high / self.candidate_step)) * self.candidate_step
+        )
         
-        # 최소한 3개 후보는 확보
+        # 최소한 3개 후보는 확보 (range_min, +step, +2*step)
         if range_max - range_min < self.candidate_step * 2:
             median = np.median(distribution)
-            range_min = max(min_kw, int((median - 30) / self.candidate_step) * self.candidate_step)
-            range_max = min(max_kw, int((median + 30) / self.candidate_step) * self.candidate_step)
+            buffer = self.candidate_step
+            adjusted_min = int(np.floor((median - buffer) / self.candidate_step)) * self.candidate_step
+            adjusted_max = int(np.ceil((median + buffer) / self.candidate_step)) * self.candidate_step
+            range_min = max(min_kw, adjusted_min)
+            range_max = min(max_kw, adjusted_max)
+        
+        # 최악의 경우라도 상·하한이 같지 않도록 보정
+        if range_min >= range_max:
+            range_min = max(min_kw, range_max - self.candidate_step * 2)
+            range_max = min(max_kw, range_min + self.candidate_step * 2)
         
         return (range_min, range_max)
     

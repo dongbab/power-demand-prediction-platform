@@ -668,7 +668,7 @@ async def get_ensemble_prediction(
     """
     try:
         from ..prediction.ensemble_prediction_engine import EnsemblePredictionEngine
-        from ..contract import ContractOptimizer, RecommendationEngine
+        from ..contract import RecommendationEngine
         
         # 데이터 로드
         loader = ChargingDataLoader(station_id)
@@ -695,17 +695,113 @@ async def get_ensemble_prediction(
             charger_type=charger_type
         )
         
-        # 계약 최적화
-        optimizer = ContractOptimizer(charger_type=charger_type)
-        contract_recommendation = optimizer.optimize_contract(
-            station_data=station_data,
-            predicted_peak_kw=prediction_result.final_prediction_kw,
-            uncertainty_kw=prediction_result.uncertainty_kw,
-            current_contract_kw=current_contract_kw
+        # 예측 분포 생성 우선순위:
+        # 1) 실제 데이터셋의 '순간최고전력' 계열
+        # 2) 앙상블 엔진이 반환한 분포
+        # 3) 최종 예측 기반 정규분포 근사 (폴백)
+        import numpy as np
+
+        prediction_distribution = None
+        power_columns = ["순간최고전력", "순간 최고 전력", "max_power", "전력"]
+        selected_power_col = None
+
+        for col in power_columns:
+            if col in station_data.columns:
+                power_series = pd.to_numeric(station_data[col], errors="coerce").dropna()
+                if not power_series.empty:
+                    prediction_distribution = power_series.values
+                    selected_power_col = col
+                    logger.info(
+                        "Using historical column '%s' (%d samples) for contract optimization distribution",
+                        col,
+                        len(power_series)
+                    )
+                    break
+
+        if prediction_distribution is None and getattr(prediction_result, "prediction_distribution", None) is not None:
+            prediction_distribution = np.array(prediction_result.prediction_distribution)
+            logger.info("Using ensemble prediction distribution as fallback input")
+
+        if prediction_distribution is None:
+            prediction_distribution = np.random.normal(
+                prediction_result.final_prediction_kw,
+                prediction_result.uncertainty_kw,
+                1000
+            )
+            logger.warning("Falling back to Gaussian approximation for prediction distribution")
+
+        daily_peak_series = []
+        session_power_series = []
+        session_prediction_series = []
+        if selected_power_col is not None:
+            time_columns = [
+                "충전시작일시",
+                "충전완료일시",
+                "timestamp",
+                "측정일시",
+                "date",
+                "created_at"
+            ]
+            selected_time_col = next((col for col in time_columns if col in station_data.columns), None)
+
+            if selected_time_col:
+                timestamps = pd.to_datetime(station_data[selected_time_col], errors="coerce")
+                peak_values = pd.to_numeric(station_data[selected_power_col], errors="coerce")
+                valid_mask = timestamps.notna() & peak_values.notna()
+
+                if valid_mask.any():
+                    daily_df = pd.DataFrame({
+                        "date": timestamps[valid_mask],
+                        "peak_kw": peak_values[valid_mask]
+                    })
+
+                    session_power_series = [
+                        {
+                            "timestamp": row["date"].isoformat(),
+                            "peak_kw": round(float(row["peak_kw"]), 2)
+                        }
+                        for _, row in daily_df.sort_values("date").iterrows()
+                    ]
+
+                    if not daily_df.empty:
+                        start_cutoff = pd.Timestamp(2024, 9, 1)
+                        daily_df = daily_df[daily_df["date"] >= start_cutoff]
+
+                        if not daily_df.empty:
+                            grouped = (
+                                daily_df
+                                .groupby(daily_df["date"].dt.date)["peak_kw"]
+                                .max()
+                                .reset_index()
+                            )
+                            daily_peak_series = [
+                                {
+                                    "date": row["date"].strftime("%Y-%m-%d"),
+                                    "peak_kw": round(float(row["peak_kw"]), 2)
+                                }
+                                for _, row in grouped.iterrows()
+                            ]
+
+        try:
+            session_prediction_series = ensemble_engine.predict_session_series(
+                station_data=station_data,
+                station_id=station_id,
+                charger_type=charger_type
+            )
+        except Exception as exc:
+            logger.warning("Session prediction generation failed: %s", exc, exc_info=True)
+        
+        # 계약 추천 생성 (RecommendationEngine 사용)
+        recommendation_engine = RecommendationEngine()
+        contract_recommendation = recommendation_engine.generate_recommendation(
+            station_id=station_id,
+            prediction_distribution=prediction_distribution,
+            historical_peak_series=daily_peak_series,
+            session_power_series=session_power_series,
+            session_prediction_series=session_prediction_series
         )
         
-        # 권고안 변환
-        recommendation_engine = RecommendationEngine()
+        # 권고안 딕셔너리 변환
         contract_dict = recommendation_engine.to_dict(contract_recommendation)
         
         # 응답 구성

@@ -1,8 +1,6 @@
 <script>
-    import { onMount, onDestroy, tick } from "svelte";
+    import { onMount, onDestroy } from "svelte";
     import MetricCard from "./MetricCard.svelte";
-    import DistributionChart from "./DistributionChart.svelte";
-    import MonthlyChart from "./MonthlyChart.svelte";
     import LoadingSpinner from "../LoadingSpinner.svelte";
 
     export let stationId;
@@ -10,17 +8,23 @@
 
     let isLoading = false;
     let lastUpdated = null;
-    let refreshInterval;
     let energyForecast = null;
     let selectedTimeframe = "90days";
     let chartContainer;
 
-    // 데이터 범위 정보
-    let dataRange = {
+    let predictionRequested = false;
+    let hasForecast = false;
+    let chartModulesReady = false;
+    let needsChartRender = false;
+    let errorMessage = "";
+    let currentStationId = null;
+
+    const defaultDataRange = {
         startDate: null,
         endDate: null,
         recordCount: 0,
     };
+    let dataRange = { ...defaultDataRange };
 
     const timeframes = [
         { value: "30days", label: "30일" },
@@ -32,12 +36,24 @@
     let Chart;
     let chart; // 차트 인스턴스
 
+    function resetForecastState() {
+        energyForecast = null;
+        dataRange = { ...defaultDataRange };
+        hasForecast = false;
+        predictionRequested = false;
+        errorMessage = "";
+        lastUpdated = null;
+        needsChartRender = false;
+        if (chart) {
+            chart.destroy();
+            chart = null;
+        }
+    }
+
     onMount(async () => {
-        // 브라우저 환경에서만 실행
-        if (typeof window === 'undefined') return;
-        
+        if (typeof window === "undefined") return;
+
         try {
-            // Chart.js와 time adapter, zoom plugin 로드 (클라이언트 전용)
             const [{ default: ChartJS }, dateAdapter, zoomPlugin] =
                 await Promise.all([
                     import("chart.js/auto"),
@@ -46,20 +62,18 @@
                 ]);
             Chart = ChartJS;
             Chart.register(zoomPlugin.default);
+            chartModulesReady = true;
 
-            // reactive statement에서 stationId 변경 시 자동으로 데이터 로드됨
-            console.log('PowerDemandPredictor onMount: Chart.js 로드 완료, stationId =', stationId);
-            // 60분마다 갱신
-            refreshInterval = setInterval(updateEnergyForecast, 60 * 60 * 1000);
-        } catch (error) {}
+            if (energyForecast?.daily_consumption?.length) {
+                needsChartRender = true;
+            }
+        } catch (error) {
+            console.error("PowerDemandPredictor: Chart.js 로드 실패", error);
+        }
     });
 
     onDestroy(() => {
         try {
-            if (refreshInterval) {
-                clearInterval(refreshInterval);
-            }
-            // 차트 정리
             if (chart) {
                 chart.destroy();
                 chart = null;
@@ -67,14 +81,48 @@
         } catch (error) {}
     });
 
-    async function updateEnergyForecast() {
+    $: if (stationId && stationId !== currentStationId) {
+        currentStationId = stationId;
+        resetForecastState();
+    }
+
+    $: if (
+        chartModulesReady &&
+        needsChartRender &&
+        chartContainer &&
+        energyForecast?.daily_consumption?.length
+    ) {
+        needsChartRender = false;
+        createChart();
+    }
+
+    async function handlePredictClick() {
+        if (isLoading || !stationId) return;
+        predictionRequested = true;
+        errorMessage = "";
+        try {
+            await loadEnergyForecast();
+        } catch (error) {
+            errorMessage = error?.message || "전력량 예측 실행에 실패했습니다.";
+        }
+    }
+
+    async function handleTimeframeChange() {
+        if (!predictionRequested || isLoading || !stationId) return;
+        errorMessage = "";
+        try {
+            await loadEnergyForecast();
+        } catch (error) {
+            errorMessage = error?.message || "전력량 예측 실행에 실패했습니다.";
+        }
+    }
+
+    async function loadEnergyForecast() {
         if (!stationId) {
             console.log('PowerDemandPredictor: stationId가 없습니다');
             return;
         }
 
-        console.log('🚀 PowerDemandPredictor: 데이터 로딩 시작, stationId:', stationId);
-        console.log('현재 selectedTimeframe:', selectedTimeframe);
         isLoading = true;
 
         try {
@@ -129,22 +177,18 @@
                     recordCount: result.timeseries_data.length,
                 };
                 
-                console.log('📅 dataRange 설정됨:', dataRange);
-                console.log('📅 startDate:', dataRange.startDate);
-                console.log('📅 endDate:', dataRange.endDate);
-
                 lastUpdated = new Date();
+                hasForecast = true;
+                needsChartRender = true;
             } else {
                 throw new Error(result.error || "에너지 예측 실패");
             }
         } catch (error) {
             console.error('Energy forecast 데이터 로드 실패:', error);
             energyForecast = null;
-            dataRange = {
-                startDate: null,
-                endDate: null,
-                recordCount: 0,
-            };
+            dataRange = { ...defaultDataRange };
+            hasForecast = false;
+            throw error;
         } finally {
             isLoading = false;
         }
@@ -354,58 +398,6 @@
             console.error("차트 생성 실패:", error);
         }
     }
-    
-    // 차트 컴포넌트가 마운트된 후 초기 차트 생성 시도
-    $: if (typeof window !== 'undefined' && chartContainer && energyForecast && Chart) {
-        setTimeout(() => {
-            createChart();
-        }, 200);
-    }
-
-    // stationId가 변경될 때마다 데이터 로드 (브라우저에서만)
-    $: if (typeof window !== 'undefined' && stationId && stationId.trim()) {
-        console.log('PowerDemandPredictor: stationId 변경됨:', stationId);
-        updateEnergyForecast();
-    } else if (typeof window !== 'undefined') {
-        console.log('PowerDemandPredictor: stationId가 유효하지 않음:', stationId);
-    }
-
-    // 차트 표시 조건 디버깅
-    $: {
-        if (typeof window !== 'undefined') {
-            console.log('📊 차트 표시 조건 체크:', {
-                energyForecast: !!energyForecast,
-                isLoading,
-                hasDaily: !!(energyForecast?.daily_consumption && energyForecast.daily_consumption.length > 0),
-                Chart: !!Chart,
-                chartContainer: !!chartContainer,
-                dailyConsumptionLength: energyForecast?.daily_consumption?.length || 0
-            });
-            
-            if (energyForecast && !isLoading) {
-                console.log('✅ 차트 데이터 준비 완료 - 차트가 표시되어야 함');
-            } else if (isLoading) {
-                console.log('⏳ 로딩 중...');
-            } else if (!energyForecast) {
-                console.log('❌ energyForecast 데이터 없음');
-            }
-        }
-    }
-
-    // 시간대 변경 시 데이터 다시 로드 (초기 로드 제외)
-    let initialized = false;
-    $: {
-        if (selectedTimeframe && initialized && stationId) {
-            console.log('PowerDemandPredictor: timeframe 변경됨:', selectedTimeframe);
-            updateEnergyForecast();
-        }
-    }
-
-    // 초기화 완료 표시
-    setTimeout(() => {
-        initialized = true;
-    }, 1000);
-
     $: averageDailyEnergy = energyForecast?.energy_statistics?.avg_daily || 0;
     $: totalEnergy = energyForecast?.energy_statistics?.total_energy || 0;
     $: growthRate = energyForecast?.growth_rate || 0;
@@ -480,143 +472,185 @@
 </script>
 
 <div class="demand-predictor">
-
-
-    <!-- 전력량 예측 기간 선택 -->
-    <div class="forecast-period-selector">
-        <div class="selector-header">
-            <h3>전력량 수요 예측 기간</h3>
-            <select bind:value={energyForecastPeriod} class="period-select">
-                {#each forecastPeriods as period}
-                    <option value={period.value}>{period.label} 예측</option>
-                {/each}
-            </select>
-        </div>
-    </div>
-
-    <div class="metrics-row">
-        <MetricCard
-            title="일평균 소비 전력량"
-            value={averageDailyEnergy}
-            unit="kWh"
-            type="energy"
-            tooltip="선택된 기간 동안의 일일 평균 소비 전력량"
-        />
-        <MetricCard
-            title="총 소비 전력량"
-            value={totalEnergy}
-            unit="kWh"
-            type="total"
-            tooltip="선택된 기간 동안의 총 소비 전력량"
-        />
-        <MetricCard
-            title="증가율"
-            value={growthRate}
-            unit="%"
-            type="growth"
-            tooltip="전 기간 대비 소비 전력량 증가율"
-        />
-        <MetricCard
-            title="예상 {forecastPeriods.find(p => p.value === energyForecastPeriod)?.label || '일간'} 전력량 수요"
-            value={predictedEnergyDemand}
-            unit="kWh"
-            type={predictedEnergyDemand >= 200 ? "contract-high" : predictedEnergyDemand >= 100 ? "contract-medium" : "contract-low"}
-            highlighted={true}
-            tooltip="에너지 사용 패턴과 성장률을 기반으로 한 {forecastPeriods.find(p => p.value === energyForecastPeriod)?.label || '일간'} 전력량 예측"
-        />
-    </div>
-
-    {#if energyForecast && !isLoading}
-        <div class="chart-container-wrapper">
-            <div class="chart-header">
-                <h3>일일 전력량 소비 추이</h3>
-                <div class="chart-meta">
-                    {#if dataRange.startDate && dataRange.endDate}
-                        <div class="data-info">
-                            <div class="data-period">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M8 2v4"></path>
-                                    <path d="M16 2v4"></path>
-                                    <rect x="3" y="4" width="18" height="18" rx="2"></rect>
-                                    <path d="M3 10h18"></path>
-                                </svg>
-                                <span>{dataRange.startDate.toLocaleDateString()} ~ {dataRange.endDate.toLocaleDateString()}</span>
-                            </div>
-                            <div class="data-stats">
-                                <span class="stat-badge">
-                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M12 20V10"></path>
-                                        <path d="M18 20V4"></path>
-                                        <path d="M6 20v-6"></path>
-                                    </svg>
-                                    {dataRange.recordCount.toLocaleString()}개
-                                </span>
-                                <span class="duration-badge">
-                                    {Math.ceil((dataRange.endDate - dataRange.startDate) / (1000 * 60 * 60 * 24))}일
-                                </span>
-                            </div>
-                        </div>
+    {#if !hasForecast}
+        <div class="prediction-placeholder">
+            <div class="placeholder-card">
+                <div class="placeholder-icon">⚡</div>
+                <h3>전력량 수요 예측을 시작하세요</h3>
+                <p>예측하기 버튼을 눌러 충전소 {stationId}의 전력 사용 패턴을 분석합니다.</p>
+                <button
+                    class="predict-cta"
+                    on:click={handlePredictClick}
+                    disabled={!stationId || isLoading}
+                >
+                    {#if isLoading}
+                        <LoadingSpinner size="small" />
+                        <span>예측 중...</span>
                     {:else}
-                        <div class="no-data-info">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-                                <line x1="12" y1="9" x2="12" y2="13"></line>
-                                <line x1="12" y1="17" x2="12.01" y2="17"></line>
-                            </svg>
-                            <span>충전소 {stationId} 데이터 미발견</span>
-                        </div>
+                        <span>{predictionRequested ? "다시 예측하기" : "예측하기"}</span>
                     {/if}
-                    {#if lastUpdated}
-                        <div class="last-updated-info">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <polyline points="12,6 12,12 16,14"></polyline>
-                            </svg>
-                            <span>마지막 업데이트 : {lastUpdated.toLocaleTimeString()}</span>
-                        </div>
-                    {/if}
-                    <div class="chart-controls">
-                        <select bind:value={selectedTimeframe} class="timeframe-select-chart">
-                            {#each timeframes as timeframe}
-                                <option value={timeframe.value}>{timeframe.label}</option>
-                            {/each}
-                        </select>
-                        <button class="zoom-reset-btn" on:click={resetZoom}>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                <path d="M3 3v18h18" />
-                                <path d="M18.5 9.5L12 16l-4-4-3.5 3.5" />
-                            </svg>
-                            원래대로
-                        </button>
-                    </div>
-                </div>
-            </div>
-            <div class="chart-container">
-                <canvas bind:this={chartContainer}></canvas>
-            </div>
-        </div>
-    {:else if isLoading}
-        <div class="chart-container-wrapper">
-            <div class="chart-loading">
-                <LoadingSpinner />
-                <p>에너지 데이터 로딩 중...</p>
+                </button>
+                {#if errorMessage}
+                    <div class="error-message">{errorMessage}</div>
+                {:else if !predictionRequested}
+                    <p class="placeholder-hint">버튼을 누르면 최근 1년 전력량 추이와 인사이트가 제공됩니다.</p>
+                {/if}
             </div>
         </div>
     {:else}
-        <div class="chart-container-wrapper">
-            <div class="no-chart-data">
-                <div class="no-data-icon">📉</div>
-                <h4>차트 데이터 없음</h4>
-                <p>에너지 소비 데이터를 불러올 수 없습니다.</p>
-                <div class="data-check-info">
-                    <p>다음 사항을 확인해주세요</p>
-                    <ul>
-                        <li>충전소 ID가 올바른지 확인</li>
-                        <li>데이터 파일이 올바르게 업로드되었는지 확인</li>
-                        <li>서버 연결 상태 확인</li>
-                    </ul>
-                </div>
+        <div class="predict-toolbar">
+            <div class="predict-meta">
+                <span>충전소 {stationId}</span>
+                {#if lastUpdated}
+                    <span>마지막 예측: {lastUpdated.toLocaleTimeString()}</span>
+                {/if}
             </div>
+            <div class="toolbar-actions">
+                <select
+                    bind:value={selectedTimeframe}
+                    class="timeframe-select-chart"
+                    on:change={handleTimeframeChange}
+                >
+                    {#each timeframes as timeframe}
+                        <option value={timeframe.value}>{timeframe.label}</option>
+                    {/each}
+                </select>
+                <button
+                    class="predict-cta compact"
+                    on:click={handlePredictClick}
+                    disabled={!stationId || isLoading}
+                >
+                    {#if isLoading}
+                        <LoadingSpinner size="small" />
+                        <span>예측 중...</span>
+                    {:else}
+                        <span>다시 예측하기</span>
+                    {/if}
+                </button>
+            </div>
+        </div>
+
+        {#if errorMessage}
+            <div class="error-message">{errorMessage}</div>
+        {/if}
+
+        <div class="forecast-period-selector">
+            <div class="selector-header">
+                <h3>전력량 수요 예측 기간</h3>
+                <select bind:value={energyForecastPeriod} class="period-select">
+                    {#each forecastPeriods as period}
+                        <option value={period.value}>{period.label} 예측</option>
+                    {/each}
+                </select>
+            </div>
+        </div>
+
+        <div class="metrics-row">
+            <MetricCard
+                title="일평균 소비 전력량"
+                value={averageDailyEnergy}
+                unit="kWh"
+                type="energy"
+                tooltip="선택된 기간 동안의 일일 평균 소비 전력량"
+            />
+            <MetricCard
+                title="총 소비 전력량"
+                value={totalEnergy}
+                unit="kWh"
+                type="total"
+                tooltip="선택된 기간 동안의 총 소비 전력량"
+            />
+            <MetricCard
+                title="증가율"
+                value={growthRate}
+                unit="%"
+                type="growth"
+                tooltip="전 기간 대비 소비 전력량 증가율"
+            />
+            <MetricCard
+                title="예상 {forecastPeriods.find(p => p.value === energyForecastPeriod)?.label || '일간'} 전력량 수요"
+                value={predictedEnergyDemand}
+                unit="kWh"
+                type={predictedEnergyDemand >= 200 ? "contract-high" : predictedEnergyDemand >= 100 ? "contract-medium" : "contract-low"}
+                highlighted={true}
+                tooltip="에너지 사용 패턴과 성장률을 기반으로 한 {forecastPeriods.find(p => p.value === energyForecastPeriod)?.label || '일간'} 전력량 예측"
+            />
+        </div>
+
+        <div class="chart-container-wrapper">
+            {#if isLoading}
+                <div class="chart-loading">
+                    <LoadingSpinner />
+                    <p>에너지 데이터 로딩 중...</p>
+                </div>
+            {:else if energyForecast}
+                <div class="chart-header">
+                    <h3>일일 전력량 소비 추이</h3>
+                    <div class="chart-meta">
+                        {#if dataRange.startDate && dataRange.endDate}
+                            <div class="data-info">
+                                <div class="data-period">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M8 2v4"></path>
+                                        <path d="M16 2v4"></path>
+                                        <rect x="3" y="4" width="18" height="18" rx="2"></rect>
+                                        <path d="M3 10h18"></path>
+                                    </svg>
+                                    <span>{dataRange.startDate.toLocaleDateString()} ~ {dataRange.endDate.toLocaleDateString()}</span>
+                                </div>
+                                <div class="data-stats">
+                                    <span class="stat-badge">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M12 20V10"></path>
+                                            <path d="M18 20V4"></path>
+                                            <path d="M6 20v-6"></path>
+                                        </svg>
+                                        {dataRange.recordCount.toLocaleString()}개
+                                    </span>
+                                    <span class="duration-badge">
+                                        {Math.ceil((dataRange.endDate - dataRange.startDate) / (1000 * 60 * 60 * 24))}일
+                                    </span>
+                                </div>
+                            </div>
+                        {:else}
+                            <div class="no-data-info">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                                </svg>
+                                <span>충전소 {stationId} 데이터 미발견</span>
+                            </div>
+                        {/if}
+                        <div class="chart-controls">
+                            <button class="zoom-reset-btn" on:click={resetZoom}>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                    <path d="M3 3v18h18" />
+                                    <path d="M18.5 9.5L12 16l-4-4-3.5 3.5" />
+                                </svg>
+                                원래대로
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas bind:this={chartContainer}></canvas>
+                </div>
+            {:else}
+                <div class="no-chart-data">
+                    <div class="no-data-icon">📉</div>
+                    <h4>차트 데이터 없음</h4>
+                    <p>에너지 소비 데이터를 불러올 수 없습니다.</p>
+                    <div class="data-check-info">
+                        <p>다음 사항을 확인해주세요</p>
+                        <ul>
+                            <li>충전소 ID가 올바른지 확인</li>
+                            <li>데이터 파일이 올바르게 업로드되었는지 확인</li>
+                            <li>서버 연결 상태 확인</li>
+                        </ul>
+                    </div>
+                </div>
+            {/if}
         </div>
 
         {#if energyForecast && energyForecast.insights && energyForecast.insights.length > 0}
@@ -648,26 +682,26 @@
                 </div>
             </div>
         {/if}
-    {/if}
 
-    {#if energyForecast && energyForecast.monthly_summary && energyForecast.monthly_summary.length > 0}
-        <div class="monthly-summary">
-            <h3>월별 에너지 소비</h3>
-            <div class="monthly-grid">
-                {#each energyForecast.monthly_summary.slice(-6) as month}
-                    <div class="month-card">
-                        <div class="month-label">{month.month_label}</div>
-                        <div class="month-total">
-                            {month.total_energy.toFixed(1)}kWh
+        {#if energyForecast && energyForecast.monthly_summary && energyForecast.monthly_summary.length > 0}
+            <div class="monthly-summary">
+                <h3>월별 에너지 소비</h3>
+                <div class="monthly-grid">
+                    {#each energyForecast.monthly_summary.slice(-6) as month}
+                        <div class="month-card">
+                            <div class="month-label">{month.month_label}</div>
+                            <div class="month-total">
+                                {month.total_energy.toFixed(1)}kWh
+                            </div>
+                            <div class="month-avg">
+                                일평균: {month.avg_daily.toFixed(1)}kWh
+                            </div>
+                            <div class="month-days">{month.active_days}일 활동</div>
                         </div>
-                        <div class="month-avg">
-                            일평균: {month.avg_daily.toFixed(1)}kWh
-                        </div>
-                        <div class="month-days">{month.active_days}일 활동</div>
-                    </div>
-                {/each}
+                    {/each}
+                </div>
             </div>
-        </div>
+        {/if}
     {/if}
 </div>
 
@@ -690,6 +724,123 @@
         border: 1px solid var(--border-color);
         border-radius: 12px;
         box-shadow: 0 2px 8px var(--shadow);
+    }
+
+    .prediction-placeholder {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 320px;
+        padding: 32px;
+        background: var(--bg-secondary);
+        border: 1px dashed var(--border-color);
+        border-radius: 16px;
+        box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.03);
+    }
+
+    .placeholder-card {
+        text-align: center;
+        max-width: 420px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+
+    .placeholder-icon {
+        font-size: 2.6rem;
+        color: var(--primary-color);
+    }
+
+    .placeholder-card h3 {
+        margin: 0;
+        font-size: 1.2rem;
+        color: var(--text-primary);
+    }
+
+    .placeholder-card p {
+        margin: 0;
+        color: var(--text-secondary);
+        line-height: 1.5;
+    }
+
+    .placeholder-hint {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+    }
+
+    .predict-cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 12px 24px;
+        border-radius: 999px;
+        font-size: 1rem;
+        font-weight: 600;
+        border: none;
+        cursor: pointer;
+        background: var(--primary-color);
+        color: #fff;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+        box-shadow: 0 6px 20px rgba(79, 70, 229, 0.25);
+    }
+
+    .predict-cta.compact {
+        padding: 10px 18px;
+        font-size: 0.95rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 14px rgba(79, 70, 229, 0.18);
+    }
+
+    .predict-cta:disabled {
+        background: var(--border-color);
+        cursor: not-allowed;
+        box-shadow: none;
+    }
+
+    .predict-cta:not(:disabled):hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 22px rgba(79, 70, 229, 0.35);
+    }
+
+    .predict-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding: 16px 20px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 14px;
+        box-shadow: 0 4px 12px var(--shadow);
+        flex-wrap: wrap;
+        margin-bottom: 20px;
+    }
+
+    .predict-meta {
+        display: flex;
+        gap: 12px;
+        font-size: 0.95rem;
+        color: var(--text-secondary);
+        flex-wrap: wrap;
+    }
+
+    .toolbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .error-message {
+        margin-top: 4px;
+        padding: 8px 12px;
+        background: rgba(239, 68, 68, 0.08);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        border-radius: 8px;
+        color: #dc2626;
+        font-size: 0.9rem;
+        line-height: 1.4;
     }
 
     .selector-header {
@@ -903,32 +1054,32 @@
         color: var(--text-muted);
     }
 
-    .no-data-message {
+    .no-chart-data {
+        display: grid;
+        place-items: center;
+        padding: 60px 24px;
         text-align: center;
-        padding: 40px 20px;
-        background: var(--neutral-light);
-        border-radius: 12px;
-        border: 1px solid var(--border-color);
-        margin-bottom: 24px;
+        min-height: 300px;
     }
 
-    .no-data-icon {
-        font-size: 3em;
-        margin-bottom: 16px;
+    .no-chart-data .no-data-icon {
+        font-size: 2.5em;
+        margin-bottom: 12px;
         opacity: 0.6;
     }
 
-    .no-data-message h4 {
-        margin: 0 0 12px 0;
+    .no-chart-data h4 {
+        margin: 0 0 8px 0;
         color: var(--text-primary);
-        font-size: 1.2em;
+        font-size: 1.1em;
         font-weight: 600;
     }
 
-    .no-data-message p {
-        margin: 0 0 20px 0;
+    .no-chart-data p {
+        margin: 0;
         color: var(--text-secondary);
-        line-height: 1.5;
+        font-size: 0.9em;
+        line-height: 1.4;
     }
 
     .data-check-info {
@@ -1052,14 +1203,6 @@
         font-weight: 500;
     }
 
-    .last-updated-info {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        color: var(--text-secondary);
-        font-size: 0.85rem;
-    }
-
     .chart-controls {
         display: flex;
         align-items: center;
@@ -1115,43 +1258,10 @@
         height: 16px;
     }
 
-    /* 다크모드 지원 */
-    :global([data-theme="dark"]) .data-info-card {
-        --bg-secondary: #1f2937;
-        --border-color: #374151;
-        --shadow: rgba(0, 0, 0, 0.3);
-        --shadow-hover: rgba(0, 0, 0, 0.5);
-        --text-primary: #f9fafb;
-        --text-secondary: #d1d5db;
-        --primary-color: #6366f1;
-    }
-
-    /* 라이트모드 지원 */
-    :global([data-theme="light"]) .data-info-card {
-        --bg-secondary: #ffffff;
-        --border-color: rgba(0, 0, 0, 0.1);
-        --shadow: rgba(0, 0, 0, 0.05);
-        --shadow-hover: rgba(0, 0, 0, 0.15);
-        --text-primary: #111827;
-        --text-secondary: #6b7280;
-        --primary-color: #4f46e5;
-    }
-
-    /* 애니메이션 최적화 */
-    @media (prefers-reduced-motion: reduce) {
-        .data-info-card {
-            transition: none !important;
-        }
-    }
-
     /* 태블릿 반응형 */
     @media (min-width: 768px) {
         .chart-container {
             height: 450px;
-        }
-
-        .insights-grid {
-            grid-template-columns: repeat(2, 1fr);
         }
 
         .monthly-grid {
@@ -1210,8 +1320,9 @@
             font-size: 0.75rem;
         }
 
-        .last-updated-info {
-            font-size: 0.8rem;
+        .predict-toolbar {
+            flex-direction: column;
+            align-items: flex-start;
         }
     }
 </style>
