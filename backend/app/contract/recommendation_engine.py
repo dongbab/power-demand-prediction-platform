@@ -9,6 +9,9 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 from dataclasses import dataclass, asdict
 
+import numpy as np
+import pandas as pd
+
 from .optimizer import ContractOptimizer, OptimizationResult
 from .cost_calculator import KEPCOCostCalculator
 
@@ -88,14 +91,13 @@ class RecommendationEngine:
         Returns:
             ContractRecommendation: 추천 결과
         """
-        import numpy as np
-        
         self.logger.info(f"Station {station_id}: 계약전력 추천 생성 시작")
         
         # 1. 최적화 실행
         optimization = self.optimizer.optimize_contract(
-            prediction_distribution,
-            current_contract_kw,
+            prediction_distribution=prediction_distribution,
+            current_contract_kw=current_contract_kw,
+            session_prediction_series=session_prediction_series,
             **optimizer_kwargs
         )
         
@@ -289,7 +291,13 @@ class RecommendationEngine:
                 "annual_cost": c.expected_annual_cost,
                 "overage_probability": c.overage_probability,
                 "waste_probability": c.waste_probability,
-                "risk_score": c.risk_score
+                "risk_score": c.risk_score,
+                "session_overage_probability": c.session_overage_probability,
+                "session_average_overshoot_kw": c.session_average_overshoot_kw,
+                "session_max_overshoot_kw": c.session_max_overshoot_kw,
+                "session_waste_probability": c.session_waste_probability,
+                "session_average_waste_kw": c.session_average_waste_kw,
+                "session_sample_size": c.session_sample_size
             }
             for c in sorted(candidates, key=lambda x: x.contract_kw)
         ]
@@ -307,7 +315,12 @@ class RecommendationEngine:
         shortfall_simulations = self._build_shortfall_simulations(
             optimization.all_candidates,
             distribution,
-            historical_peaks
+            historical_peaks,
+            session_prediction_series
+        )
+        session_prediction_assessment = self._build_session_prediction_assessment(
+            session_prediction_series,
+            optimization.all_candidates
         )
 
         return {
@@ -346,14 +359,131 @@ class RecommendationEngine:
             "daily_peak_series": historical_peaks or [],
             "session_power_series": session_series or [],
             "session_prediction_series": session_prediction_series or [],
-            "contract_shortfall_simulations": shortfall_simulations
+            "contract_shortfall_simulations": shortfall_simulations,
+            "session_prediction_assessment": session_prediction_assessment
+        }
+
+    def _normalize_session_prediction_points(
+        self,
+        session_predictions: Optional[List[Dict[str, Any]]]
+    ) -> List[Dict[str, Any]]:
+        if not isinstance(session_predictions, list):
+            return []
+
+        normalized: List[Dict[str, Any]] = []
+        for entry in session_predictions:
+            timestamp = entry.get("timestamp") or entry.get("date") or entry.get("time")
+            value = (
+                entry.get("predicted_peak_kw")
+                or entry.get("predictedPeakKw")
+                or entry.get("peak_kw")
+                or entry.get("peakKw")
+                or entry.get("value")
+            )
+            if timestamp is None or value is None:
+                continue
+            ts = pd.to_datetime(timestamp, errors="coerce")
+            if pd.isna(ts):
+                continue
+            try:
+                normalized.append({
+                    "timestamp": ts,
+                    "value": float(value)
+                })
+            except (TypeError, ValueError):
+                continue
+
+        return sorted(normalized, key=lambda item: item["timestamp"])
+
+    def _build_session_prediction_assessment(
+        self,
+        session_predictions: Optional[List[Dict[str, Any]]],
+        candidates: List[Any]
+    ) -> Optional[Dict[str, Any]]:
+        normalized = self._normalize_session_prediction_points(session_predictions)
+        if not normalized:
+            return None
+
+        first_ts = normalized[0]["timestamp"]
+        last_ts = normalized[-1]["timestamp"]
+        span_days = (last_ts - first_ts).days if first_ts and last_ts else None
+
+        return {
+            "total_points": len(normalized),
+            "time_span_days": span_days,
+            "first_timestamp": first_ts.isoformat() if first_ts else None,
+            "last_timestamp": last_ts.isoformat() if last_ts else None,
+            "candidates": [
+                {
+                    "contract_kw": c.contract_kw,
+                    "session_overage_probability": c.session_overage_probability,
+                    "session_average_overshoot_kw": c.session_average_overshoot_kw,
+                    "session_max_overshoot_kw": c.session_max_overshoot_kw,
+                    "session_waste_probability": c.session_waste_probability,
+                    "session_average_waste_kw": c.session_average_waste_kw,
+                    "session_sample_size": c.session_sample_size
+                }
+                for c in sorted(candidates, key=lambda item: item.contract_kw)
+            ]
+        }
+
+    def _assess_session_predictions(
+        self,
+        session_predictions: Optional[List[Dict[str, Any]]],
+        contract_kw: float,
+        sample_limit: int = 80
+    ) -> Optional[Dict[str, Any]]:
+        normalized = self._normalize_session_prediction_points(session_predictions)
+        if not normalized:
+            return None
+
+        values = [item["value"] for item in normalized]
+        if not values:
+            return None
+
+        total = len(values)
+        overshoot_points = [item for item in normalized if item["value"] > contract_kw]
+        waste_points = [item for item in normalized if item["value"] < contract_kw]
+
+        def _avg(dataset: List[float]) -> Optional[float]:
+            return float(np.mean(dataset)) if dataset else None
+
+        overshoot_magnitudes = [item["value"] - contract_kw for item in overshoot_points]
+        waste_magnitudes = [contract_kw - item["value"] for item in waste_points]
+
+        summary = {
+            "session_sample_size": total,
+            "session_overage_probability": (len(overshoot_points) / total * 100) if total else None,
+            "session_average_overshoot_kw": _avg(overshoot_magnitudes),
+            "session_max_overshoot_kw": float(np.max(overshoot_magnitudes)) if overshoot_magnitudes else None,
+            "session_waste_probability": (len(waste_points) / total * 100) if total else None,
+            "session_average_waste_kw": _avg(waste_magnitudes)
+        }
+
+        samples = [
+            {
+                "timestamp": item["timestamp"].isoformat(),
+                "predicted_peak_kw": round(item["value"], 2),
+                "overshoot_kw": round(item["value"] - contract_kw, 2)
+            }
+            for item in sorted(
+                overshoot_points,
+                key=lambda point: point["value"],
+                reverse=True
+            )[:sample_limit]
+        ]
+
+        return {
+            "summary": summary,
+            "samples": samples
         }
 
     def _build_shortfall_simulations(
         self,
         candidates: List[Any],
         distribution: Any,
-        historical_peaks: Optional[List[Dict[str, Any]]] = None
+        historical_peaks: Optional[List[Dict[str, Any]]] = None,
+        session_predictions: Optional[List[Dict[str, Any]]] = None
     ) -> List[Dict[str, Any]]:
         """LSTM 기반 과소 계약 시뮬레이션 데이터 생성"""
         import numpy as np
@@ -419,6 +549,13 @@ class RecommendationEngine:
                         "risk_factor": round(risk_factor, 3)
                     })
 
+            session_eval = self._assess_session_predictions(
+                session_predictions,
+                contract_kw
+            )
+            session_summary = session_eval.get("summary") if session_eval else None
+            session_samples = session_eval.get("samples") if session_eval else []
+
             simulations.append({
                 "contract_kw": int(contract_kw),
                 "overshoot_probability": round(overshoot_probability, 2),
@@ -426,7 +563,9 @@ class RecommendationEngine:
                 "p90_overshoot_kw": round(p90_overshoot_kw, 2),
                 "model_source": "lstm_mc_dropout",
                 "updated_at": datetime.now().isoformat(),
-                "daily_projection": daily_projection
+                "daily_projection": daily_projection,
+                "session_prediction_summary": session_summary,
+                "session_prediction_samples": session_samples
             })
 
         return simulations

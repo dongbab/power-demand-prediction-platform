@@ -22,6 +22,12 @@ class ContractCandidate:
     cost_std: float  # 비용 표준편차
     cost_percentiles: Dict[str, float]  # 비용 분위수
     risk_score: float  # 리스크 점수
+    session_overage_probability: Optional[float] = None
+    session_average_overshoot_kw: Optional[float] = None
+    session_max_overshoot_kw: Optional[float] = None
+    session_waste_probability: Optional[float] = None
+    session_average_waste_kw: Optional[float] = None
+    session_sample_size: Optional[int] = None
 
 
 @dataclass
@@ -97,7 +103,8 @@ class ContractOptimizer:
         current_contract_kw: Optional[int] = None,
         min_contract_kw: int = 10,
         max_contract_kw: int = 200,
-        risk_tolerance: float = 0.1  # 0.0 (보수적) ~ 1.0 (공격적)
+        risk_tolerance: float = 0.1,  # 0.0 (보수적) ~ 1.0 (공격적)
+        session_prediction_series: Optional[List[Dict[str, Any]]] = None
     ) -> OptimizationResult:
         """
         계약전력 최적화 실행
@@ -111,6 +118,7 @@ class ContractOptimizer:
             min_contract_kw: 최소 계약전력
             max_contract_kw: 최대 계약전력
             risk_tolerance: 리스크 허용도 (0=보수적, 1=공격적)
+            session_prediction_series: 세션 기반 예측 시계열 (OPTIONAL)
             
         Returns:
             OptimizationResult: 최적화 결과
@@ -149,7 +157,8 @@ class ContractOptimizer:
         candidates = self._evaluate_candidates(
             candidate_range,
             prediction_distribution,
-            risk_tolerance
+            risk_tolerance,
+            session_prediction_series
         )
         
         if not candidates:
@@ -245,7 +254,8 @@ class ContractOptimizer:
         self,
         candidate_range: Tuple[int, int],
         distribution: np.ndarray,
-        risk_tolerance: float
+        risk_tolerance: float,
+        session_series: Optional[List[Dict[str, Any]]] = None
     ) -> List[ContractCandidate]:
         """모든 후보 평가"""
         candidates = []
@@ -264,6 +274,11 @@ class ContractOptimizer:
                 cost_analysis["cost_std"],
                 risk_tolerance
             )
+
+            session_metrics = self._compute_session_risk_metrics(
+                contract_kw,
+                session_series
+            )
             
             candidate = ContractCandidate(
                 contract_kw=contract_kw,
@@ -272,7 +287,13 @@ class ContractOptimizer:
                 waste_probability=cost_analysis["waste_probability"],
                 cost_std=cost_analysis["cost_std"],
                 cost_percentiles=cost_analysis["cost_percentiles"],
-                risk_score=risk_score
+                risk_score=risk_score,
+                session_overage_probability=session_metrics.get("session_overage_probability") if session_metrics else None,
+                session_average_overshoot_kw=session_metrics.get("session_average_overshoot_kw") if session_metrics else None,
+                session_max_overshoot_kw=session_metrics.get("session_max_overshoot_kw") if session_metrics else None,
+                session_waste_probability=session_metrics.get("session_waste_probability") if session_metrics else None,
+                session_average_waste_kw=session_metrics.get("session_average_waste_kw") if session_metrics else None,
+                session_sample_size=session_metrics.get("session_sample_size") if session_metrics else None
             )
             
             candidates.append(candidate)
@@ -315,6 +336,56 @@ class ContractOptimizer:
         )
         
         return risk_score
+
+    def _compute_session_risk_metrics(
+        self,
+        contract_kw: int,
+        session_series: Optional[List[Dict[str, Any]]]
+    ) -> Optional[Dict[str, float]]:
+        """세션 예측 기반 리스크 메트릭 계산"""
+        if not session_series:
+            return None
+
+        values: List[float] = []
+        for entry in session_series:
+            raw_value = None
+            for key in (
+                "predicted_peak_kw",
+                "predictedPeakKw",
+                "peak_kw",
+                "peakKw",
+                "value"
+            ):
+                if entry.get(key) is not None:
+                    raw_value = entry.get(key)
+                    break
+            if raw_value is None:
+                continue
+            try:
+                values.append(float(raw_value))
+            except (TypeError, ValueError):
+                continue
+
+        if not values:
+            return None
+
+        total = len(values)
+        overshoot = [val - contract_kw for val in values if val > contract_kw]
+        waste = [contract_kw - val for val in values if val < contract_kw]
+
+        def _avg(dataset: List[float]) -> Optional[float]:
+            return float(np.mean(dataset)) if dataset else None
+
+        metrics: Dict[str, Optional[float]] = {
+            "session_sample_size": total,
+            "session_overage_probability": (len(overshoot) / total * 100) if total else None,
+            "session_average_overshoot_kw": _avg(overshoot),
+            "session_max_overshoot_kw": float(np.max(overshoot)) if overshoot else None,
+            "session_waste_probability": (len(waste) / total * 100) if total else None,
+            "session_average_waste_kw": _avg(waste)
+        }
+
+        return metrics
     
     def _select_optimal_candidate(
         self,
