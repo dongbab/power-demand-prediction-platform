@@ -1144,6 +1144,9 @@
     }
 
     function handleCandidateSelect(contractKw: number) {
+        if (selectedContractKw === contractKw) {
+            return;
+        }
         selectedContractKw = contractKw;
     }
 </script>
@@ -1152,36 +1155,6 @@
     <h3 class="chart-title">10kW 단위 계약전력 최적화 알고리즘</h3>
     
     <div class="chart-sections">
-        <!-- Section 1: 예측분포 (Chart.js) -->
-        <div class="section prediction-distribution">
-            <h4>예측분포 생성 결과</h4>
-            <div class="chart-wrapper">
-                <canvas bind:this={chartCanvas} id="prediction-chart"></canvas>
-            </div>
-            <div class="chart-legend">
-                <div class="legend-item">
-                    <span class="legend-color" style="background: #9c27b0;"></span>
-                    <span class="legend-text">Q₅: {Math.round(q5)}kW, Q₉₅: {Math.round(q95)}kW</span>
-                </div>
-                <div class="legend-item">
-                    <span class="legend-color" style="background: #10b981;"></span>
-                    <span class="legend-text">최적 계약: {optimalCandidate ? optimalCandidate.contract_kw : 0}kW</span>
-                </div>
-                {#if lstmProjection.length > 0}
-                    <div class="legend-item">
-                        <span class="legend-color projection"></span>
-                        <span class="legend-text">LSTM 과소 계약 시 예상 분포</span>
-                    </div>
-                {/if}
-                {#if shortfallDailyProjection.length > 0}
-                    <div class="legend-item">
-                        <span class="legend-color overshoot"></span>
-                        <span class="legend-text">딥러닝 과소 시뮬레이션</span>
-                    </div>
-                {/if}
-            </div>
-        </div>
-
         <div class="section time-series">
             <div class="section-header">
                 <h4>세션 기반 순간전력 추이</h4>
@@ -1259,10 +1232,19 @@
         <h4>확률 및 비용 산정 모듈</h4>
         <div class="table-info">
             <div class="info-badge">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <circle cx="12" cy="12" r="10"/>
-                    <line x1="12" y1="16" x2="12" y2="12"/>
-                    <line x1="12" y1="8" x2="12.01" y2="8"/>
+                <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                >
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M12 10v5" />
+                    <path d="M12 7h.01" />
                 </svg>
                 <span>각 행을 클릭하면 선택한 계약전력 기준으로 그래프 상 선형 안내선이 갱신됩니다.</span>
             </div>
@@ -1298,7 +1280,23 @@
                             class:selected={isSelected}
                             on:click={() => handleCandidateSelect(candidate.contract_kw)}
                         >
-                            <td class="contract-value sticky-col" data-label="후보 (kW)">{candidate.contract_kw}</td>
+                            <td class="contract-value sticky-col" data-label="후보 (kW)">
+                                <button
+                                    type="button"
+                                    class="toggle-indicator"
+                                    class:active={isSelected}
+                                    aria-pressed={isSelected}
+                                    title={isSelected ? '현재 선택된 계약안' : '계약안 선택'}
+                                    on:click|stopPropagation={() => handleCandidateSelect(candidate.contract_kw)}
+                                >
+                                    <span class="sr-only">{candidate.contract_kw}kW 계약안 선택</span>
+                                    <span aria-hidden="true"></span>
+                                </button>
+                                <span class="contract-text">{candidate.contract_kw}</span>
+                                {#if isSelected}
+                                    <span class="selected-tag">선택됨</span>
+                                {/if}
+                            </td>
                             <td class="overage-data" data-label="과다 계약 확률" class:highlight={candidate.overage_probability > 70}>
                                 <span class="percentage">{Math.round(candidate.overage_probability)}%</span>
                             </td>
@@ -1875,8 +1873,97 @@
     }
 
     tr.selected {
-        box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.35);
+        background: var(--output-bg) !important;
+        box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.32);
+        border-left: 4px solid var(--accent-primary);
         transform: translateY(-1px);
+    }
+
+    tr.selected td {
+        color: var(--text-primary);
+    }
+
+    tr.selected td.sticky-col {
+        background: var(--output-bg) !important;
+    }
+
+    td.contract-value {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .toggle-indicator {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        border: 2px solid rgba(79, 70, 229, 0.35);
+        background: transparent;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        padding: 0;
+    }
+
+    .toggle-indicator span[aria-hidden="true"] {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: transparent;
+        transition: background 0.2s ease;
+    }
+
+    .toggle-indicator:hover {
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.12);
+    }
+
+    .toggle-indicator:focus-visible {
+        outline: none;
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.18);
+    }
+
+    .toggle-indicator.active {
+        border-color: var(--accent-primary);
+        background: rgba(79, 70, 229, 0.14);
+    }
+
+    .toggle-indicator.active span[aria-hidden="true"] {
+        background: var(--accent-primary);
+    }
+
+    .contract-text {
+        font-size: 1.05rem;
+        font-weight: 700;
+    }
+
+    .selected-tag {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(79, 70, 229, 0.18);
+        color: var(--accent-primary);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+    }
+
+    .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
     }
 
     /* Scenario/conclusion UI styles removed as markup no longer renders those sections */

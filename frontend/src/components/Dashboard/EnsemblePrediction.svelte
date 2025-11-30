@@ -390,39 +390,6 @@
                             </div>
                         </div>
                     </div>
-
-                    <!-- 위험 평가 -->
-                    {#if prediction.contract_recommendation.risk_assessment}
-                        <div class="risk-assessment">
-                            <h3 class="risk-title">
-                                <span class="risk-icon">⚠️</span>
-                                위험 평가
-                            </h3>
-                            {#if riskSummary}
-                                <p class="risk-summary">{riskSummary}</p>
-                            {/if}
-                            <div class="risk-metrics">
-                                <div class="risk-metric">
-                                    <span class="risk-label">위험 수준</span>
-                                    <span class="risk-value level">
-                                        {getRiskLabel(prediction.contract_recommendation.risk_assessment.risk_level)}
-                                    </span>
-                                </div>
-                                <div class="risk-metric">
-                                    <span class="risk-label">초과 확률</span>
-                                    <span class="risk-value">
-                                        {formatPercent(prediction.contract_recommendation.risk_assessment.overage_probability, 1)}
-                                    </span>
-                                </div>
-                                <div class="risk-metric">
-                                    <span class="risk-label">낭비 확률</span>
-                                    <span class="risk-value">
-                                        {formatPercent(prediction.contract_recommendation.risk_assessment.waste_probability, 1)}
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-                    {/if}
                 </div>
             {/if}
         </div>
