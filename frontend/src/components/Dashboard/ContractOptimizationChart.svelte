@@ -1,11 +1,17 @@
 <script lang="ts">
     import { onMount, onDestroy } from 'svelte';
     import type { Chart as ChartInstance, Point } from 'chart.js';
-    import type { EnsemblePredictionResponse } from '../../lib/types';
-    
+    import type {
+        EnsemblePredictionResponse,
+        ContractShortfallSimulation,
+        ContractShortfallDailyPoint,
+        ContractCandidateDetail
+    } from '../../lib/types';
+
     export let optimizationData: any = null;
     export let predictionDistribution: number[] = [];
     export let ensemblePrediction: EnsemblePredictionResponse['ensemble_prediction'] | null = null;
+    export let stationId: string;
     
     let chartContainer: HTMLDivElement;
     let chartCanvas: HTMLCanvasElement | null = null;
@@ -14,9 +20,13 @@
     let histogram: { x: number; y: number }[] = [];
     let lstmProjection: { x: number; y: number }[] = [];
     let q5 = 0;
+    let q90 = 0;
     let q95 = 0;
-    let optimalCandidate: any = null;
-    let allCandidates: any[] = [];
+    let historicalMax = 0;
+    let projectedPeakKw = 0;
+    let optimalCandidate: ContractCandidateDetail | null = null;
+    let manualCandidate: ContractCandidateDetail | null = null;
+    let allCandidates: ContractCandidateDetail[] = [];
     let ChartCtor: typeof import('chart.js/auto')['default'] | null = null;
     let chartReady = false;
     let timeSeriesCanvas: HTMLCanvasElement | null = null;
@@ -26,138 +36,78 @@
     let combinedSessionSeries: SessionPoint[] = [];
     let hasSessionTimeline = false;
     let sessionDomain: { min: number | null; max: number | null } = { min: null, max: null };
+    let scenarioRows: ScenarioRow[] = [];
+    let shortfallScenarios: ShortfallScenario[] = [];
+    let shortfallDailyProjection: ShortfallDailyPoint[] = [];
+    let activeShortfallScenario: ShortfallScenario | null = null;
+    let overfitSignal: OverfitSignal = { isRisk: false, mae: null, relativeError: null, coverageDays: 0 };
+    let selectedContractKw: number | null = null;
+    let targetContractKw: number | null = null;
+    let isManualUndershoot = false;
+    let isManualOvershoot = false;
+    let defaultRecentRange: { min: number | null; max: number | null } = { min: null, max: null };
     const DEFAULT_SESSION_WINDOW_DAYS = 90;
 
-    type ScenarioMode = 'auto' | 'overage' | 'waste';
+    // 모델 검증 데이터 (9월까지 학습 → 10월 예측)
+    let validationData: any = null;
+    let validationLoading = false;
+    let validationError: string | null = null;
+    const BASIC_RATE_PER_KW = 8320;
+    const SHORTAGE_PENALTY_RATIO = 1.5;
+    const BASIC_RATE_LABEL = BASIC_RATE_PER_KW.toLocaleString('ko-KR');
+
     type SessionPoint = { date: string; power_kw: number };
-    type ScenarioSummary = {
-        badge: string;
-        title: string;
-        highlight: string;
-        note: string;
-        description: string;
-        metricLabel: string;
-        metricValue: string;
-        extraLabel?: string;
-        extraValue?: string;
-        extraNote?: string;
-    } | null;
-    type ShortfallDailyPoint = {
-        date: string;
-        simulated_peak_kw: number;
-        overshoot_kw: number;
-        historical_peak_kw?: number;
-        risk_factor?: number;
-    };
-    type ShortfallScenario = {
-        contract_kw: number;
-        overshoot_probability: number;
-        expected_overshoot_kw: number;
-        p90_overshoot_kw: number;
-        model_source?: string;
-        updated_at?: string;
-        daily_projection: ShortfallDailyPoint[];
-    };
-    const scenarioOptions: { value: ScenarioMode; label: string; helper: string }[] = [
-        { value: 'auto', label: 'AI 추천 기준', helper: '기존 최적화 결과에 따른 기본 권장치' },
-        { value: 'overage', label: '과다 계약 체크', helper: '초과 계약 위험을 최소화하는 보수적 선택' },
-        { value: 'waste', label: '과소 계약 대비', helper: '최근 실측 데이터를 기준으로 과소 위험 점검' }
-    ];
-    let selectedScenario: ScenarioMode = 'auto';
-    let selectedScenarioMeta = scenarioOptions[0];
-    let scenarioSummary: ScenarioSummary = null;
-    let q90 = 0;
-    let historicalMax = 0;
-    let selectedContractKw: number | null = null;
-    let manualCandidate: any = null;
-    let isManualUndershoot = false;
-    let projectedPeakKw = 0;
-    let shortfallScenarios: ShortfallScenario[] = [];
-    let activeShortfallScenario: ShortfallScenario | null = null;
-    let shortfallDailyProjection: ShortfallDailyPoint[] = [];
-    let defaultRecentRange: { min: number | null; max: number | null } = { min: null, max: null };
     type OverfitSignal = {
         isRisk: boolean;
         mae: number | null;
         relativeError: number | null;
         coverageDays: number;
     };
-    let overfitSignal: OverfitSignal = {
-        isRisk: false,
-        mae: null,
-        relativeError: null,
-        coverageDays: 0
+    type ScenarioRow = {
+        scenario: 'over' | 'optimal' | 'under';
+        scenarioLabel: string;
+        contractKw: number;
+        baseMonthly: number;
+        overCostMonthly: number;
+        shortageMonthly: number;
+        totalLossMonthly: number;
+        evaluation: string;
     };
-    
-    async function ensureChartModules() {
-        if (chartReady) {
-            return;
-        }
-        const [
-            { default: Chart },
-            { default: annotation },
-            zoomModule
-        ] = await Promise.all([
-            import('chart.js/auto'),
-            import('chartjs-plugin-annotation'),
-            import('chartjs-plugin-zoom'),
-            import('chartjs-adapter-date-fns')
-        ]);
-        const zoomPlugin = (zoomModule && zoomModule.default) || zoomModule;
-        Chart.register(annotation, zoomPlugin);
-        ChartCtor = Chart;
-        chartReady = true;
-    }
-    
-    // 다크모드 감지
-    function detectDarkMode() {
-        if (typeof window !== 'undefined') {
-            // Tailwind dark mode 클래스 체크
-            isDarkMode = document.documentElement.classList.contains('dark');
-            
-            // 만약 Tailwind dark 클래스가 없으면 시스템 설정 체크
-            if (!isDarkMode) {
-                isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            }
-        }
-        return isDarkMode;
-    }
-    
-    // 분포 데이터에서 히스토그램 생성
-    function generateHistogram(distribution: number[], bins: number = 30) {
-        if (!distribution || distribution.length === 0) return [];
-        
-        const min = Math.min(...distribution);
-        const max = Math.max(...distribution);
-        const range = max - min;
-        const binWidth = range / bins;
+    type ShortfallDailyPoint = ContractShortfallDailyPoint;
+    type ShortfallScenario = ContractShortfallSimulation;
 
-        if (range === 0 || binWidth === 0) {
-            return [
-                {
-                    x: min,
-                    y: distribution.length
-                }
-            ];
-        }
-        
-        const histogram = Array(bins).fill(0);
-        distribution.forEach(value => {
-            const binIndex = Math.min(Math.floor((value - min) / binWidth), bins - 1);
-            histogram[binIndex]++;
-        });
-        
-        return histogram.map((count, i) => ({
-            x: min + (i + 0.5) * binWidth,
-            y: count
-        }));
+    function toNumber(value: any): number | null {
+        const num = Number(value);
+        return Number.isFinite(num) ? num : null;
     }
 
-    function normalPdf(x: number, mean: number, stdDev: number) {
-        if (stdDev <= 0) return 0;
-        const coeff = 1 / (stdDev * Math.sqrt(2 * Math.PI));
-        const exponent = Math.exp(-0.5 * Math.pow((x - mean) / stdDev, 2));
-        return coeff * exponent;
+    function normalizeCandidate(candidate: any): ContractCandidateDetail | null {
+        const contractKw = toNumber(candidate?.contract_kw);
+        if (contractKw === null) {
+            return null;
+        }
+
+        const normalizeOptional = (val: any) => {
+            const num = toNumber(val);
+            return num === null ? undefined : num;
+        };
+
+        return {
+            ...candidate,
+            contract_kw: contractKw,
+            expected_annual_cost: toNumber(candidate?.expected_annual_cost) ?? 0,
+            overage_probability: toNumber(candidate?.overage_probability) ?? 0,
+            waste_probability: toNumber(candidate?.waste_probability) ?? 0,
+            cost_std: normalizeOptional(candidate?.cost_std),
+            risk_score: normalizeOptional(candidate?.risk_score),
+            session_overage_probability: normalizeOptional(candidate?.session_overage_probability),
+            session_average_overshoot_kw: normalizeOptional(candidate?.session_average_overshoot_kw),
+            session_max_overshoot_kw: normalizeOptional(candidate?.session_max_overshoot_kw),
+            session_waste_probability: normalizeOptional(candidate?.session_waste_probability),
+            session_average_waste_kw: normalizeOptional(candidate?.session_average_waste_kw),
+            session_sample_size: normalizeOptional(candidate?.session_sample_size),
+            session_expected_waste_cost: normalizeOptional(candidate?.session_expected_waste_cost)
+        };
     }
 
     function normalizeSessionSeries(series?: any[] | null): SessionPoint[] {
@@ -331,6 +281,192 @@
             .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     }
 
+    function normalPdf(x: number, mean: number, stdDev: number) {
+        const safeStd = Math.max(stdDev, 1e-3);
+        const coeff = 1 / (safeStd * Math.sqrt(2 * Math.PI));
+        const exponent = -0.5 * ((x - mean) / safeStd) ** 2;
+        return coeff * Math.exp(exponent);
+    }
+
+    function generateHistogram(values: number[], targetBins = 26) {
+        if (!Array.isArray(values) || values.length === 0) {
+            return [];
+        }
+        const normalized = values
+            .map((value) => Number(value))
+            .filter((value) => Number.isFinite(value));
+        if (normalized.length === 0) {
+            return [];
+        }
+        const min = Math.min(...normalized);
+        const max = Math.max(...normalized);
+        const bins = Math.max(8, Math.min(targetBins, normalized.length));
+        const range = max - min || 1;
+        const width = range / bins;
+        const counts = new Array(bins).fill(0);
+        normalized.forEach((value) => {
+            const index = Math.min(bins - 1, Math.floor((value - min) / width));
+            counts[index] += 1;
+        });
+        return counts.map((count, index) => {
+            const x = min + width * index + width / 2;
+            return { x: Number(x.toFixed(2)), y: Number(count.toFixed(2)) };
+        });
+    }
+
+    function detectDarkMode() {
+        if (typeof document === 'undefined') {
+            return false;
+        }
+        const html = document.documentElement;
+        if (html.classList.contains('dark') || html.getAttribute('data-theme') === 'dark') {
+            return true;
+        }
+        if (typeof window !== 'undefined' && window.matchMedia) {
+            return window.matchMedia('(prefers-color-scheme: dark)').matches;
+        }
+        return false;
+    }
+
+    function formatManwon(value?: number | null) {
+        if (value === null || value === undefined || Number.isNaN(value)) {
+            return '-';
+        }
+        const manwon = value / 10000;
+        const digits = Math.abs(manwon) >= 100 ? 0 : 1;
+        return manwon.toLocaleString('ko-KR', {
+            maximumFractionDigits: digits,
+            minimumFractionDigits: digits
+        });
+    }
+
+    function calcWasteCost(candidate: ContractCandidateDetail, referenceKw: number) {
+        if (typeof candidate.session_expected_waste_cost === 'number') {
+            return candidate.session_expected_waste_cost;
+        }
+        const wasteProb = (candidate.session_waste_probability ?? candidate.waste_probability ?? 0) / 100;
+        if (wasteProb <= 0) {
+            return 0;
+        }
+        const wasteKw = Math.max(0, candidate.contract_kw - referenceKw);
+        if (wasteKw <= 0) {
+            return 0;
+        }
+        return wasteKw * BASIC_RATE_PER_KW * wasteProb;
+    }
+
+    function calcShortageCost(candidate: ContractCandidateDetail, referenceKw: number) {
+        const overshootKw = candidate.session_average_overshoot_kw
+            ?? candidate.session_max_overshoot_kw
+            ?? Math.max(0, referenceKw - candidate.contract_kw);
+        if (!overshootKw) {
+            return 0;
+        }
+        const probability = (candidate.session_overage_probability ?? candidate.overage_probability ?? 0) / 100;
+        if (probability <= 0) {
+            return 0;
+        }
+        return overshootKw * BASIC_RATE_PER_KW * SHORTAGE_PENALTY_RATIO * probability;
+    }
+
+    function describeScenarioImpact(scenario: ScenarioRow['scenario'], candidate: ContractCandidateDetail) {
+        const overProb = candidate.session_overage_probability ?? candidate.overage_probability ?? 0;
+        const wasteProb = candidate.session_waste_probability ?? candidate.waste_probability ?? 0;
+        if (scenario === 'optimal') {
+            return '추천';
+        }
+        if (scenario === 'under') {
+            if (overProb >= 60) return '위험';
+            if (overProb >= 30) return '주의';
+            return '조건부';
+        }
+        if (wasteProb >= 60) return '비효율';
+        if (wasteProb >= 30) return '여유';
+        return '안정';
+    }
+
+    function buildScenarioRows(candidates: ContractCandidateDetail[], optimalKw: number | null): ScenarioRow[] {
+        if (!Array.isArray(candidates) || candidates.length === 0) {
+            return [];
+        }
+        const referenceKw = optimalKw ?? candidates[0].contract_kw;
+        const rows = candidates.map((candidate) => {
+            const scenario: ScenarioRow['scenario'] = candidate.contract_kw === referenceKw
+                ? 'optimal'
+                : candidate.contract_kw > referenceKw
+                    ? 'over'
+                    : 'under';
+            const scenarioLabel = scenario === 'optimal' ? '최적안' : scenario === 'over' ? '과다' : '과소';
+            const baseMonthly = candidate.contract_kw * BASIC_RATE_PER_KW;
+            const overCostMonthly = scenario === 'over' ? calcWasteCost(candidate, referenceKw) : 0;
+            const shortageMonthly = scenario === 'under' ? calcShortageCost(candidate, referenceKw) : 0;
+            const totalLossMonthly = overCostMonthly + shortageMonthly;
+            return {
+                scenario,
+                scenarioLabel,
+                contractKw: candidate.contract_kw,
+                baseMonthly,
+                overCostMonthly,
+                shortageMonthly,
+                totalLossMonthly,
+                evaluation: describeScenarioImpact(scenario, candidate)
+            } satisfies ScenarioRow;
+        });
+        const orderWeight: Record<ScenarioRow['scenario'], number> = { optimal: 0, under: 1, over: 2 };
+        return rows.sort((a, b) => orderWeight[a.scenario] - orderWeight[b.scenario] || a.contractKw - b.contractKw);
+    }
+
+    async function fetchValidationData() {
+        if (!stationId) return;
+
+        validationLoading = true;
+        validationError = null;
+
+        try {
+            console.log('[ContractOptimizationChart] Fetching validation data for:', stationId);
+            const response = await fetch(`/api/stations/${stationId}/model-validation`);
+            const data = await response.json();
+
+            if (data.success) {
+                console.log('[ContractOptimizationChart] Validation data received:', data);
+                validationData = data;
+            } else {
+                console.warn('[ContractOptimizationChart] Validation failed:', data.error);
+                validationError = data.error || '검증 데이터를 불러올 수 없습니다.';
+            }
+        } catch (error) {
+            console.error('[ContractOptimizationChart] Validation data fetch error:', error);
+            validationError = '네트워크 오류가 발생했습니다.';
+        } finally {
+            validationLoading = false;
+        }
+    }
+
+    async function ensureChartModules() {
+        if (typeof window === 'undefined') {
+            return;
+        }
+        if (ChartCtor) {
+            chartReady = true;
+            return;
+        }
+        try {
+            const [{ default: ChartJS }, annotationPlugin, zoomPlugin] = await Promise.all([
+                import('chart.js/auto'),
+                import('chartjs-plugin-annotation'),
+                import('chartjs-plugin-zoom')
+            ]);
+            await import('chartjs-adapter-date-fns');
+            ChartJS.register(annotationPlugin.default || annotationPlugin);
+            ChartJS.register(zoomPlugin.default || zoomPlugin);
+            ChartCtor = ChartJS;
+            chartReady = true;
+        } catch (error) {
+            chartReady = false;
+            console.error('ContractOptimizationChart: Chart.js 모듈 로드 실패', error);
+        }
+    }
+
     function findShortfallScenario(
         scenarios: ShortfallScenario[],
         contractKw: number | null
@@ -429,10 +565,10 @@
         const histogramData = histogram.length ? histogram : generateHistogram(predictionDistribution);
         const q5Val = percentile(predictionDistribution, 5);
         const q95Val = percentile(predictionDistribution, 95);
-        const optimalKw = optimalCandidate?.contract_kw || 0;
-        const manualKw = manualCandidate?.contract_kw || optimalKw;
+        const optimalKw = optimalCandidate?.contract_kw ?? 0;
+        const manualKw = selectedContractKw ?? optimalKw;
         const projectedMax = projectedPeakKw || q95Val;
-        const showUnderProjection = manualCandidate && isManualUndershoot && projectedMax > manualKw;
+        const showUnderProjection = manualKw !== null && isManualUndershoot && projectedMax > manualKw;
         
         // 기존 차트 제거
         if (chartInstance) {
@@ -495,7 +631,7 @@
             }
         };
 
-        if (manualCandidate) {
+        if (manualKw !== null && manualKw !== undefined) {
             annotations.manualLine = {
                 type: 'line',
                 xMin: manualKw,
@@ -528,6 +664,27 @@
                     backgroundColor: 'rgba(14, 165, 233, 0.9)',
                     color: '#fff',
                     content: `과소 리스크 예상 ${Math.round(projectedMax)}kW`,
+                    font: { size: 11, weight: '600' }
+                }
+            };
+        }
+
+        // 과다 시나리오 시각화
+        const showOverProjection = manualKw !== null && isManualOvershoot && manualKw > q95Val;
+        if (showOverProjection) {
+            annotations.overProjection = {
+                type: 'box',
+                xMin: Math.round(q95Val),
+                xMax: manualKw,
+                backgroundColor: 'rgba(34, 197, 94, 0.08)',
+                borderColor: 'rgba(34, 197, 94, 0.5)',
+                borderWidth: 1,
+                label: {
+                    display: true,
+                    position: 'end',
+                    backgroundColor: 'rgba(34, 197, 94, 0.85)',
+                    color: '#fff',
+                    content: `여유 영역 (과다 계약)`,
                     font: { size: 11, weight: '600' }
                 }
             };
@@ -645,6 +802,12 @@
             timeSeriesChartInstance = null;
         }
 
+        // validation 데이터가 있으면 그것을 우선 사용
+        if (validationData && validationData.visualization_data) {
+            createValidationChart();
+            return;
+        }
+
         if (!hasSessionTimeline) {
             return;
         }
@@ -663,6 +826,21 @@
         }));
 
         const manualKw = selectedContractKw ?? optimalCandidate?.contract_kw ?? null;
+        const currentContractKw = optimizationData?.current_contract_kw ?? null;
+
+        const observedMax = Math.max(
+            ...[
+                ...sessionSeries.map((point) => point.power_kw),
+                ...sessionPredictionSeries.map((point) => point.power_kw),
+                ...shortfallDailyProjection.map((point) => point.simulated_peak_kw)
+            ].filter((value) => Number.isFinite(value))
+        );
+        const referenceMax = Math.max(
+            Number.isFinite(observedMax) ? observedMax : 0,
+            manualKw ?? 0,
+            currentContractKw ?? 0
+        );
+        const ySuggestedMax = referenceMax > 0 ? referenceMax * 1.08 : undefined;
         const predictedOvershootFill = manualKw !== null
             ? predictedSessions.map(point => ({
                 x: point.x,
@@ -687,6 +865,14 @@
             }))
             : [];
 
+        // 과다 계약 시 여유 영역 표시
+        const wasteAreaDataset = hasSimulation && isManualOvershoot
+            ? shortfallDailyProjection.map(point => ({
+                x: new Date(point.date).getTime(),
+                y: manualKw
+            }))
+            : [];
+
         const annotations: Record<string, any> = {};
 
         if (manualKw !== null) {
@@ -704,6 +890,25 @@
                     backgroundColor: '#f97316',
                     color: '#fff',
                     font: { size: 11, weight: 'bold' }
+                }
+            };
+        }
+
+        if (currentContractKw !== null) {
+            annotations.currentContractLine = {
+                type: 'line',
+                yMin: currentContractKw,
+                yMax: currentContractKw,
+                borderColor: '#22c55e',
+                borderWidth: 1.5,
+                borderDash: [4, 4],
+                label: {
+                    content: `현재 계약선: ${currentContractKw}kW`,
+                    display: true,
+                    position: 'start',
+                    backgroundColor: '#22c55e',
+                    color: '#0f172a',
+                    font: { size: 10, weight: 'bold' }
                 }
             };
         }
@@ -771,20 +976,39 @@
                     }
 
                     if (hasSimulation) {
-                        baseDatasets.push({
-                            label: '과소 위험 영역',
-                            data: overshootFillDataset,
-                            borderColor: 'rgba(248, 113, 113, 0)',
-                            backgroundColor: 'rgba(248, 113, 113, 0.2)',
-                            pointRadius: 0,
-                            pointHoverRadius: 0,
-                            tension: 0.2,
-                            borderWidth: 0,
-                            fill: manualKw !== null ? { target: { value: manualKw } } : false,
-                            order: 0,
-                            spanGaps: true,
-                            parsing: false
-                        });
+                        if (isManualOvershoot && wasteAreaDataset.length > 0) {
+                            // 과다 계약 시 여유 영역 표시
+                            baseDatasets.push({
+                                label: '여유 영역 (과다 계약)',
+                                data: wasteAreaDataset,
+                                borderColor: 'rgba(34, 197, 94, 0)',
+                                backgroundColor: 'rgba(34, 197, 94, 0.12)',
+                                pointRadius: 0,
+                                pointHoverRadius: 0,
+                                tension: 0.2,
+                                borderWidth: 0,
+                                fill: { target: 'origin' },
+                                order: -1,
+                                spanGaps: false,
+                                parsing: false
+                            });
+                        } else {
+                            // 과소 계약 시 위험 영역 표시
+                            baseDatasets.push({
+                                label: '과소 위험 영역',
+                                data: overshootFillDataset,
+                                borderColor: 'rgba(248, 113, 113, 0)',
+                                backgroundColor: 'rgba(248, 113, 113, 0.2)',
+                                pointRadius: 0,
+                                pointHoverRadius: 0,
+                                tension: 0.2,
+                                borderWidth: 0,
+                                fill: manualKw !== null ? { target: { value: manualKw } } : false,
+                                order: 0,
+                                spanGaps: true,
+                                parsing: false
+                            });
+                        }
                         baseDatasets.push({
                             label: '딥러닝 예측 곡선',
                             data: smoothedProjectionLine.length > 0 ? smoothedProjectionLine : projectionDataset,
@@ -847,6 +1071,7 @@
                             color: textColor,
                             font: { size: 13, weight: 'bold' }
                         },
+                        suggestedMax: ySuggestedMax,
                         ticks: {
                             color: textColor
                         },
@@ -922,6 +1147,204 @@
         });
     }
 
+    function createValidationChart() {
+        if (!timeSeriesCanvas || !ChartCtor || !validationData) {
+            console.log('[ContractOptimizationChart] Skipping createValidationChart - missing:', {
+                canvas: !!timeSeriesCanvas,
+                chart: !!ChartCtor,
+                data: !!validationData
+            });
+            return;
+        }
+
+        console.log('[ContractOptimizationChart] Creating validation chart with data:', validationData.data_split);
+
+        const textColor = isDarkMode ? '#e2e8f0' : '#1f2937';
+        const gridColor = isDarkMode ? 'rgba(148, 163, 184, 0.2)' : 'rgba(0, 0, 0, 0.08)';
+
+        // 학습 기간 실제 데이터 (train_visualization_data 사용)
+        const trainData = (validationData.train_visualization_data || []).map((item: any) => ({
+            x: new Date(item.date).getTime(),
+            y: item.actual_peak_kw
+        }));
+
+        // 테스트 기간 실제 데이터
+        const testActualData = validationData.visualization_data.map((item: any) => ({
+            x: new Date(item.date).getTime(),
+            y: item.actual_peak_kw
+        }));
+
+        // 테스트 기간 예측 데이터
+        const testPredictedData = validationData.visualization_data.map((item: any) => ({
+            x: new Date(item.date).getTime(),
+            y: item.predicted_peak_kw
+        }));
+
+        // 학습/테스트 구간 날짜
+        const trainEndDate = validationData.data_split?.train_end_date || '2024-09-30';
+        const testStartDate = validationData.data_split?.test_start_date || '2024-10-01';
+
+        const datasets: any[] = [
+            {
+                label: `실제 피크 (${trainEndDate}까지 학습 데이터)`,
+                data: trainData,
+                borderColor: '#10b981',
+                backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                borderWidth: 2,
+                pointRadius: 2,
+                pointHoverRadius: 4,
+                tension: 0.2,
+                fill: false,
+                order: 3
+            },
+            {
+                label: `실제 피크 (${testStartDate}부터 테스트)`,
+                data: testActualData,
+                borderColor: '#ef4444',
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                borderWidth: 2.5,
+                pointRadius: 3,
+                pointHoverRadius: 5,
+                tension: 0.2,
+                fill: false,
+                order: 1,
+                borderDash: []
+            },
+            {
+                label: `예측 피크 (${testStartDate}부터)`,
+                data: testPredictedData,
+                borderColor: '#3b82f6',
+                backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                borderWidth: 2,
+                pointRadius: 2,
+                pointHoverRadius: 4,
+                tension: 0.3,
+                fill: false,
+                order: 2,
+                borderDash: [5, 5]
+            }
+        ];
+
+        const splitLineDate = new Date(testStartDate).getTime();
+        const annotations: Record<string, any> = {
+            trainTestSplit: {
+                type: 'line',
+                xMin: splitLineDate,
+                xMax: splitLineDate,
+                borderColor: '#f59e0b',
+                borderWidth: 2,
+                borderDash: [10, 5],
+                label: {
+                    content: `${trainEndDate}까지 학습 → ${testStartDate}부터 예측`,
+                    display: true,
+                    position: 'start',
+                    backgroundColor: '#f59e0b',
+                    color: 'white',
+                    font: { size: 11, weight: 'bold' }
+                }
+            }
+        };
+
+        timeSeriesChartInstance = new ChartCtor(timeSeriesCanvas, {
+            type: 'line',
+            data: { datasets },
+            options: {
+                parsing: false,
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'nearest',
+                    intersect: false
+                },
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            tooltipFormat: 'yyyy-MM-dd',
+                            unit: 'day',
+                            displayFormats: {
+                                day: 'MM-dd',
+                                month: 'yyyy-MM'
+                            }
+                        },
+                        ticks: {
+                            color: textColor
+                        },
+                        grid: {
+                            color: gridColor
+                        },
+                        title: {
+                            display: true,
+                            text: '날짜 (9월 학습 → 10월 예측)',
+                            color: textColor,
+                            font: { size: 13, weight: 'bold' }
+                        }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: '전력 (kW)',
+                            color: textColor,
+                            font: { size: 13, weight: 'bold' }
+                        },
+                        ticks: {
+                            color: textColor
+                        },
+                        grid: {
+                            color: gridColor
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: {
+                            color: textColor,
+                            usePointStyle: true,
+                            padding: 15,
+                            font: { size: 12 }
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            title: items => items[0]?.parsed?.x ? new Date(items[0].parsed.x).toLocaleDateString('ko-KR') : '',
+                            label: context => {
+                                const value = context.parsed?.y;
+                                if (value === null || value === undefined) return '';
+                                const label = context.dataset?.label ?? '';
+                                return `${label}: ${value.toFixed(1)} kW`;
+                            }
+                        },
+                        backgroundColor: isDarkMode ? 'rgba(30, 41, 59, 0.95)' : 'rgba(255, 255, 255, 0.95)',
+                        titleColor: textColor,
+                        bodyColor: textColor,
+                        borderColor: isDarkMode ? '#475569' : '#e5e7eb',
+                        borderWidth: 1
+                    },
+                    annotation: {
+                        annotations
+                    },
+                    zoom: {
+                        zoom: {
+                            wheel: {
+                                enabled: true
+                            },
+                            pinch: {
+                                enabled: true
+                            },
+                            mode: 'x'
+                        },
+                        pan: {
+                            enabled: true,
+                            mode: 'x'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     function applyTimelineRange(range: { min: number | null; max: number | null }) {
         if (!timeSeriesChartInstance) {
             return;
@@ -939,81 +1362,20 @@
         timeSeriesChartInstance.update('none');
     }
 
-    function showFullTimeline() {
-        applyTimelineRange({ min: sessionDomain.min, max: sessionDomain.max });
-        if (timeSeriesChartInstance && typeof timeSeriesChartInstance.resetZoom === 'function') {
-            timeSeriesChartInstance.resetZoom();
-        }
-    }
-
     function showRecentTimeline() {
-        const range = computeRecentRange(sessionDomain);
-        applyTimelineRange(range);
+        if (!hasSessionTimeline) {
+            return;
+        }
+        applyTimelineRange(defaultRecentRange);
     }
 
-    function computeScenarioSummary(
-        mode: ScenarioMode,
-        optimal: any,
-        candidates: any[],
-        q90Value: number,
-        historicalMaxValue: number,
-        projectedMaxValue: number
-    ): ScenarioSummary {
-        if (!optimizationData || !optimal) {
-            return null;
+    function showFullTimeline() {
+        if (!hasSessionTimeline) {
+            return;
         }
-
-        const baseSummary: ScenarioSummary = {
-            badge: '기본 추천',
-            title: 'AI 최적화 기준',
-            highlight: `${optimizationData.optimal_contract_kw}kW`,
-            note: '추천 로직 그대로 유지',
-            description: '10kW 단위 최적화와 리스크 스코어를 반영한 기본 권장 계약전력입니다.',
-            metricLabel: '초과 · 과소 위험',
-            metricValue: `초과 ${Math.round(optimal.overage_probability ?? 0)}% · 과소 ${Math.round(optimal.waste_probability ?? 0)}%`
-        };
-
-        if (mode === 'auto') {
-            return baseSummary;
-        }
-
-        if (mode === 'overage' && candidates.length > 0) {
-            const conservativeCandidate = candidates.reduce((best, current) => {
-                if (!best) return current;
-                return current.overage_probability < best.overage_probability ? current : best;
-            }, candidates[0]);
-
-            return {
-                badge: '과다 체크',
-                title: '보수적 검증',
-                highlight: `${conservativeCandidate.contract_kw}kW`,
-                note: '사용자 수동 선택 기준',
-                description: '초과(Overage) 확률이 가장 낮은 후보를 표시하여 과다 계약 시나리오를 직접 점검할 수 있습니다.',
-                metricLabel: '초과 위험 (Overage)',
-                metricValue: `${Math.round(conservativeCandidate.overage_probability)}%`,
-                extraLabel: '해당 후보 비용',
-                extraValue: `${Math.round(conservativeCandidate.expected_annual_cost / 10000)}만원/년`,
-                extraNote: 'AI 추천 결과에는 영향을 주지 않습니다.'
-            };
-        }
-
-        const q90Rounded = Math.round(q90Value);
-        const guardKw = q90Rounded > 0 ? Math.ceil(q90Rounded / 10) * 10 : optimizationData.optimal_contract_kw;
-        const projectedRounded = projectedMaxValue ? Math.round(projectedMaxValue) : Math.round(historicalMaxValue);
-        return {
-            badge: '과소 대비',
-            title: '실측 기반 보강',
-            highlight: `${guardKw}kW`,
-            note: '최근 데이터 참고',
-            description: '과소(Waste) 시나리오 선택 시 최근 실측 분포의 90% 구간과 최대값을 참고해 수동 판단을 돕습니다.',
-            metricLabel: '실측 분포 지표',
-            metricValue: `Q90 ${q90Rounded}kW · Max ${projectedRounded}kW`,
-            extraLabel: '참고 계약안',
-            extraValue: `${guardKw}kW 제안`,
-            extraNote: '과거 데이터 기반 참고치'
-        };
+        applyTimelineRange(sessionDomain);
     }
-    
+
     // 다크모드 변경 감지
     function setupDarkModeListener() {
         if (typeof window === 'undefined') return;
@@ -1039,27 +1401,38 @@
         
         // 시스템 설정 변경 감지
         const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-        const handleChange = (e: MediaQueryListEvent) => {
-            isDarkMode = e.matches;
+        const handleChange = (e: MediaQueryListEvent | MediaQueryList) => {
+            const matches = 'matches' in e ? e.matches : mediaQuery.matches;
+            isDarkMode = matches;
             createChart();
             createTimeSeriesChart();
         };
-        mediaQuery.addEventListener('change', handleChange);
+        if (typeof mediaQuery.addEventListener === 'function') {
+            mediaQuery.addEventListener('change', handleChange as EventListener);
+        } else if (typeof mediaQuery.addListener === 'function') {
+            mediaQuery.addListener(handleChange as any);
+        }
         
         return () => {
             observer.disconnect();
-            mediaQuery.removeEventListener('change', handleChange);
+            if (typeof mediaQuery.removeEventListener === 'function') {
+                mediaQuery.removeEventListener('change', handleChange as EventListener);
+            } else if (typeof mediaQuery.removeListener === 'function') {
+                mediaQuery.removeListener(handleChange as any);
+            }
         };
     }
     
     onMount(() => {
         isDarkMode = detectDarkMode();
+        // validation 데이터 먼저 가져오기
+        fetchValidationData();
         ensureChartModules().then(() => {
             createChart();
             createTimeSeriesChart();
         });
         const cleanup = setupDarkModeListener();
-        
+
         return cleanup;
     });
     
@@ -1076,6 +1449,7 @@
     $: if (predictionDistribution.length > 0 && chartCanvas && chartReady) {
         manualCandidate;
         isManualUndershoot;
+        isManualOvershoot;
         projectedPeakKw;
         lstmProjection;
         createChart();
@@ -1100,6 +1474,7 @@
         isDarkMode;
         manualCandidate;
         optimalCandidate;
+        validationData;
         createTimeSeriesChart();
     }
     
@@ -1109,12 +1484,15 @@
     $: q90 = percentile(predictionDistribution, 90);
     $: historicalMax = safeMax(predictionDistribution);
     $: projectedPeakKw = Math.max(percentile(predictionDistribution, 99), historicalMax || 0);
-    $: optimalCandidate = optimizationData?.optimal_candidate;
-    $: allCandidates = optimizationData?.all_candidates || [];
-    $: selectedScenarioMeta = scenarioOptions.find(option => option.value === selectedScenario) || scenarioOptions[0];
-    $: scenarioSummary = computeScenarioSummary(selectedScenario, optimalCandidate, allCandidates, q90, historicalMax, projectedPeakKw);
+    $: optimalCandidate = optimizationData?.optimal_candidate ? normalizeCandidate(optimizationData.optimal_candidate) : null;
+    $: allCandidates = Array.isArray(optimizationData?.all_candidates)
+        ? optimizationData.all_candidates
+            .map(normalizeCandidate)
+            .filter((candidate): candidate is ContractCandidateDetail => candidate !== null)
+        : [];
+    $: scenarioRows = buildScenarioRows(allCandidates, optimalCandidate?.contract_kw ?? null);
     $: if (allCandidates.length > 0) {
-        const defaultKw = optimizationData?.optimal_candidate?.contract_kw ?? allCandidates[0].contract_kw;
+        const defaultKw = optimalCandidate?.contract_kw ?? allCandidates[0].contract_kw;
         const hasSelection = selectedContractKw !== null && allCandidates.some(candidate => candidate.contract_kw === selectedContractKw);
         if (!hasSelection) {
             selectedContractKw = defaultKw;
@@ -1122,17 +1500,34 @@
     } else {
         selectedContractKw = null;
     }
-    $: manualCandidate = allCandidates.find(candidate => candidate.contract_kw === selectedContractKw) || null;
-    $: isManualUndershoot = !!manualCandidate && (
-        (manualCandidate.waste_probability ?? 0) > 50 ||
-        manualCandidate.contract_kw < q90
-    );
+    $: manualCandidate = selectedContractKw !== null
+        ? allCandidates.find(candidate => candidate.contract_kw === selectedContractKw) || null
+        : null;
+    $: isManualUndershoot = (() => {
+        const kw = selectedContractKw;
+        const overProb = manualCandidate
+            ? (manualCandidate.session_overage_probability ?? manualCandidate.overage_probability ?? 0)
+            : 0;
+        if (overProb > 30) return true;
+        if (kw === null) return false;
+        return kw < q90;
+    })();
+    $: isManualOvershoot = (() => {
+        const kw = selectedContractKw;
+        const wasteProb = manualCandidate
+            ? (manualCandidate.session_waste_probability ?? manualCandidate.waste_probability ?? 0)
+            : 0;
+        if (wasteProb > 30) return true;
+        if (kw === null) return false;
+        return kw > q95;
+    })();
     $: shortfallScenarios = Array.isArray(optimizationData?.contract_shortfall_simulations)
         ? optimizationData.contract_shortfall_simulations
         : [];
+    $: targetContractKw = selectedContractKw ?? optimalCandidate?.contract_kw ?? null;
     $: activeShortfallScenario = findShortfallScenario(
         shortfallScenarios,
-        manualCandidate?.contract_kw ?? optimalCandidate?.contract_kw ?? null
+        targetContractKw
     );
     $: shortfallDailyProjection = normalizeShortfallProjection(activeShortfallScenario?.daily_projection);
     $: overfitSignal = computeOverfitSignal(sessionSeries, shortfallDailyProjection);
@@ -1143,90 +1538,216 @@
         lstmProjection = [];
     }
 
-    function handleCandidateSelect(contractKw: number) {
-        if (selectedContractKw === contractKw) {
+    function handleCandidateSelect(contractKw: number | string) {
+        const nextKw = toNumber(contractKw);
+        if (nextKw === null || selectedContractKw === nextKw) {
             return;
         }
-        selectedContractKw = contractKw;
+        selectedContractKw = nextKw;
     }
 </script>
 
 <div class="optimization-chart" bind:this={chartContainer}>
-    <h3 class="chart-title">10kW 단위 계약전력 최적화 알고리즘</h3>
-    
     <div class="chart-sections">
         <div class="section time-series">
             <div class="section-header">
                 <h4>세션 기반 순간전력 추이</h4>
                 {#if hasSessionTimeline}
                     <div class="chart-actions">
-                        <button type="button" class="reset-zoom" on:click={showRecentTimeline}>최근 3개월</button>
-                        <button type="button" class="reset-zoom" on:click={showFullTimeline}>전체 기간</button>
+                        <button
+                            type="button"
+                            class="reset-zoom"
+                            on:click={showRecentTimeline}>최근 3개월</button
+                        >
+                        <button
+                            type="button"
+                            class="reset-zoom"
+                            on:click={showFullTimeline}>전체 기간</button
+                        >
                         <span class="zoom-hint">스크롤 · 터치로 확대/축소</span>
                     </div>
                 {/if}
             </div>
 
-            {#if hasSessionTimeline}
+            {#if validationLoading}
+                <div class="chart-wrapper time-domain-chart">
+                    <div class="loading-state">
+                        <div class="loading-spinner"></div>
+                        <p>검증 데이터를 불러오는 중...</p>
+                    </div>
+                </div>
+            {:else if hasSessionTimeline || validationData}
                 <div class="chart-wrapper time-domain-chart">
                     <canvas bind:this={timeSeriesCanvas}></canvas>
                 </div>
-                <p class="chart-footnote">
-                    모든 충전 세션(실측 + 모델 예측)의 순간최대 전력을 시계열로 표현했습니다. 기본 뷰는 최근 3개월이며 확대/축소로 전체 기간을 탐색할 수 있습니다. 선택한 계약전력 시나리오가 있으면 예측 궤적이 계약선을 넘을 때 보라색 초과 영역으로 강조되어, 제한이 없을 경우 얼마나 초과할 수 있는지 직관적으로 확인할 수 있습니다.
-                    {#if shortfallDailyProjection.length > 0}
-                        딥러닝 기반 예측 곡선(분홍색)과 과소 위험 영역(붉은 음영)으로 계약선 초과 가능성을 강조했습니다.
-                    {/if}
-                </p>
+
+                {#if validationData && validationData.visualization_data}
+                    <!-- 모델 검증 방식 설명 -->
+                    <div class="validation-info-banner">
+                        <div class="info-header">
+                            <span class="info-icon">📊</span>
+                            <h5>모델 검증: {validationData.data_split.train_end_date}까지 학습 → {validationData.data_split.test_start_date}부터 예측</h5>
+                        </div>
+                        <p class="info-description">
+                            <strong class="highlight-green">녹색 실선</strong>: {validationData.data_split.train_end_date}까지의 <strong>실제 충전 피크</strong> (학습 데이터) <br/>
+                            <strong class="highlight-red">빨간색 실선</strong>: {validationData.data_split.test_start_date}~{validationData.data_split.test_end_date}의 <strong>실제 충전 피크</strong> (테스트 데이터 - 실제 발생한 값) <br/>
+                            <strong class="highlight-blue">파란색 점선</strong>: {validationData.data_split.train_end_date}까지 학습한 모델이 <strong>테스트 기간을 예측한 결과</strong>
+                        </p>
+                        <div class="validation-metrics">
+                            <div class="metric-card">
+                                <span class="metric-label">MAE (평균 절대 오차)</span>
+                                <span class="metric-value">{validationData.validation_metrics.mae} kW</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">상대 오차</span>
+                                <span class="metric-value">{validationData.validation_metrics.relative_error_percent.toFixed(1)}%</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">상관계수</span>
+                                <span class="metric-value">{validationData.validation_metrics.correlation.toFixed(3)}</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">일관성</span>
+                                <span class="metric-value consistency-{validationData.validation_metrics.consistency}">
+                                    {validationData.validation_metrics.consistency}
+                                </span>
+                            </div>
+                        </div>
+                        <p class="info-note">
+                            💡 <strong>용어 설명:</strong>
+                            <strong>"실제 피크"</strong>는 충전소에서 실제로 측정된 일별 최대 전력이고,
+                            <strong>"예측 피크"</strong>는 9월까지의 데이터로 학습한 AI 모델이 10월에 발생할 것으로 예상한 일별 최대 전력입니다.
+                            빨간색과 파란색이 가까울수록 모델의 예측 정확도가 높습니다.
+                        </p>
+                    </div>
+                {:else}
+                    <p class="chart-footnote">
+                        모든 충전 세션(실측 + 모델 예측)의 순간최대 전력을 시계열로
+                        표현했습니다. 기본 뷰는 최근 3개월이며 확대/축소로 전체
+                        기간을 탐색할 수 있습니다. 선택한 계약전력 시나리오가 있으면
+                        예측 궤적이 계약선을 넘을 때 보라색 초과 영역으로 강조되어,
+                        제한이 없을 경우 얼마나 초과할 수 있는지 직관적으로 확인할
+                        수 있습니다.
+                        {#if shortfallDailyProjection.length > 0}
+                            {#if isManualOvershoot}
+                                딥러닝 기반 예측 곡선(분홍색)과 여유 영역(녹색 음영)으로
+                                과다 계약으로 인한 낭비 가능성을 시각화했습니다.
+                            {:else}
+                                딥러닝 기반 예측 곡선(분홍색)과 과소 위험 영역(붉은
+                                음영)으로 계약선 초과 가능성을 강조했습니다.
+                            {/if}
+                        {/if}
+                    </p>
+                {/if}
                 {#if overfitSignal.coverageDays >= 3}
-                    <div class="overfit-banner" class:risk={overfitSignal.isRisk}>
+                    <div
+                        class="overfit-banner"
+                        class:risk={overfitSignal.isRisk}
+                    >
                         <div class="overfit-header">
-                            <span class="status-chip">{overfitSignal.isRisk ? '과적합 의심' : '일관성 양호'}</span>
+                            <span class="status-chip"
+                                >{overfitSignal.isRisk
+                                    ? "과적합 의심"
+                                    : "일관성 양호"}</span
+                            >
                             <span class="overfit-meta">
-                                MAE {overfitSignal.mae !== null ? `${overfitSignal.mae.toFixed(1)}kW` : '측정 불가'} · 비교 {overfitSignal.coverageDays}일
+                                MAE {overfitSignal.mae !== null
+                                    ? `${overfitSignal.mae.toFixed(1)}kW`
+                                    : "측정 불가"} · 비교 {overfitSignal.coverageDays}일
                                 {#if overfitSignal.relativeError !== null}
-                                    · 상대 오차 {(overfitSignal.relativeError * 100).toFixed(1)}%
+                                    · 상대 오차 {(
+                                        overfitSignal.relativeError * 100
+                                    ).toFixed(1)}%
                                 {/if}
                             </span>
                         </div>
                         <p>
                             {#if overfitSignal.isRisk}
-                                최근 실측 패턴과 예측 추세가 다르게 움직여 과적합 가능성이 있습니다. 최신 데이터를 반영하거나 하이퍼파라미터를 조정해 주세요.
+                                최근 실측 패턴과 예측 추세가 다르게 움직여
+                                과적합 가능성이 있습니다. 최신 데이터를
+                                반영하거나 하이퍼파라미터를 조정해 주세요.
                             {:else}
-                                예측 곡선이 실측 추세와 충분히 일치하여 안정적으로 일반화되고 있습니다.
+                                예측 곡선이 실측 추세와 충분히 일치하여
+                                안정적으로 일반화되고 있습니다.
                             {/if}
                         </p>
                     </div>
                 {/if}
                 {#if activeShortfallScenario && selectedContractKw !== null && shortfallDailyProjection.length > 0}
-                    <div class="simulation-summary">
+                    <div class="simulation-summary" class:overshoot={isManualOvershoot}>
                         <div class="summary-header">
-                            <span>{selectedContractKw}kW 기준 딥러닝 과소 시뮬레이션</span>
-                            <span class="model-chip">{getModelLabel(activeShortfallScenario.model_source)}</span>
+                            <span
+                                >{selectedContractKw}kW 기준 딥러닝 {isManualOvershoot ? '과다' : '과소'}
+                                시뮬레이션</span
+                            >
+                            <span class="model-chip"
+                                >{getModelLabel(
+                                    activeShortfallScenario.model_source
+                                )}</span
+                            >
                         </div>
                         <div class="summary-grid">
-                            <div class="summary-metric">
-                                <span>과소 확률</span>
-                                <strong>{activeShortfallScenario.overshoot_probability.toFixed(1)}%</strong>
-                            </div>
-                            <div class="summary-metric">
-                                <span>예상 초과 폭 (평균)</span>
-                                <strong>{activeShortfallScenario.expected_overshoot_kw.toFixed(1)}kW</strong>
-                            </div>
-                            <div class="summary-metric">
-                                <span>P90 초과 폭</span>
-                                <strong>{activeShortfallScenario.p90_overshoot_kw.toFixed(1)}kW</strong>
-                            </div>
+                            {#if isManualOvershoot}
+                                <div class="summary-metric">
+                                    <span>여유 확률 (낭비 가능성)</span>
+                                    <strong
+                                        >{(100 - activeShortfallScenario.overshoot_probability).toFixed(
+                                            1
+                                        )}%</strong
+                                    >
+                                </div>
+                                <div class="summary-metric">
+                                    <span>평균 여유 전력</span>
+                                    <strong
+                                        >{(selectedContractKw - (activeShortfallScenario.expected_overshoot_kw || q95)).toFixed(
+                                            1
+                                        )}kW</strong
+                                    >
+                                </div>
+                                <div class="summary-metric">
+                                    <span>예상 월 낭비 비용</span>
+                                    <strong
+                                        >{formatManwon(manualCandidate?.session_expected_waste_cost ?? 0)} 만원</strong
+                                    >
+                                </div>
+                            {:else}
+                                <div class="summary-metric">
+                                    <span>과소 확률</span>
+                                    <strong
+                                        >{activeShortfallScenario.overshoot_probability.toFixed(
+                                            1
+                                        )}%</strong
+                                    >
+                                </div>
+                                <div class="summary-metric">
+                                    <span>예상 초과 폭 (평균)</span>
+                                    <strong
+                                        >{activeShortfallScenario.expected_overshoot_kw.toFixed(
+                                            1
+                                        )}kW</strong
+                                    >
+                                </div>
+                                <div class="summary-metric">
+                                    <span>P90 초과 폭</span>
+                                    <strong
+                                        >{activeShortfallScenario.p90_overshoot_kw.toFixed(
+                                            1
+                                        )}kW</strong
+                                    >
+                                </div>
+                            {/if}
                         </div>
                     </div>
                 {/if}
             {:else}
                 <div class="empty-state">
-                    세션 기반 피크 데이터가 부족하여 시계열 그래프를 표시할 수 없습니다.
+                    세션 기반 피크 데이터가 부족하여 시계열 그래프를 표시할 수
+                    없습니다.
                 </div>
             {/if}
         </div>
     </div>
-    
+
     <!-- Section 3: 비용 산정 테이블 -->
     <div class="section cost-table">
         <h4>확률 및 비용 산정 모듈</h4>
@@ -1246,97 +1767,71 @@
                     <path d="M12 10v5" />
                     <path d="M12 7h.01" />
                 </svg>
-                <span>각 행을 클릭하면 선택한 계약전력 기준으로 그래프 상 선형 안내선이 갱신됩니다.</span>
+                <span
+                    >각 행을 클릭하면 선택한 계약전력 기준으로 그래프 상 선형
+                    안내선이 갱신됩니다.</span
+                >
             </div>
         </div>
-        <div class="table-container">
-            <table>
+        <div class="scenario-table-container">
+            <table class="scenario-table">
                 <thead>
                     <tr>
-                        <th rowspan="2" class="sticky-col">후보<br/><small>(kW)</small></th>
-                        <th colspan="2" class="group-header overage-group">과다 계약 (Overage)</th>
-                        <th colspan="2" class="group-header waste-group">과소 계약 (Waste)</th>
-                        <th rowspan="2" class="total-header">총비용<br/><small>(만원/년)</small></th>
-                        <th rowspan="2" class="remark-header">비고</th>
-                    </tr>
-                    <tr>
-                        <th class="sub-header">확률</th>
-                        <th class="sub-header">기회비용<br/><small>(만원/년)</small></th>
-                        <th class="sub-header">확률</th>
-                        <th class="sub-header">초과금<br/><small>(만원/년)</small></th>
+                        <th>시나리오</th>
+                        <th>계약전력</th>
+                        <th
+                            >월 기본요금<br /><small
+                                >(kW당 {BASIC_RATE_LABEL}원)</small
+                            ></th
+                        >
+                        <th>과다계약 비용</th>
+                        <th>과소계약 손실</th>
+                        <th>총 손실</th>
+                        <th>경제적 평가</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {#each allCandidates as candidate, i}
-                        {@const isOptimal = candidate.contract_kw === optimalCandidate?.contract_kw}
-                        {@const isSelected = candidate.contract_kw === selectedContractKw}
-                        {@const overageCost = candidate.expected_annual_cost * (candidate.overage_probability / 100)}
-                        {@const wasteCost = candidate.expected_annual_cost * (candidate.waste_probability / 100)}
-                        
-                        <tr
-                            class:optimal={isOptimal}
-                            class:high-overage={candidate.overage_probability > 70}
-                            class:high-waste={candidate.waste_probability > 70}
-                            class:selected={isSelected}
-                            on:click={() => handleCandidateSelect(candidate.contract_kw)}
-                        >
-                            <td class="contract-value sticky-col" data-label="후보 (kW)">
-                                <button
-                                    type="button"
-                                    class="toggle-indicator"
-                                    class:active={isSelected}
-                                    aria-pressed={isSelected}
-                                    title={isSelected ? '현재 선택된 계약안' : '계약안 선택'}
-                                    on:click|stopPropagation={() => handleCandidateSelect(candidate.contract_kw)}
-                                >
-                                    <span class="sr-only">{candidate.contract_kw}kW 계약안 선택</span>
-                                    <span aria-hidden="true"></span>
-                                </button>
-                                <span class="contract-text">{candidate.contract_kw}</span>
-                                {#if isSelected}
-                                    <span class="selected-tag">선택됨</span>
-                                {/if}
-                            </td>
-                            <td class="overage-data" data-label="과다 계약 확률" class:highlight={candidate.overage_probability > 70}>
-                                <span class="percentage">{Math.round(candidate.overage_probability)}%</span>
-                            </td>
-                            <td class="overage-data" data-label="과다 계약 기회비용 (만원/년)" class:highlight={candidate.overage_probability > 70}>
-                                <span class="cost-value">{Math.round(overageCost / 10000)}</span>
-                            </td>
-                            <td class="waste-data" data-label="과소 계약 확률" class:highlight={candidate.waste_probability > 70}>
-                                <span class="percentage">{Math.round(candidate.waste_probability)}%</span>
-                            </td>
-                            <td class="waste-data" data-label="과소 계약 초과금 (만원/년)" class:highlight={candidate.waste_probability > 70}>
-                                <span class="cost-value">{Math.round(wasteCost / 10000)}</span>
-                            </td>
-                            <td class="total-cost" data-label="총비용 (만원/년)">
-                                <span class="total-value">{Math.round(candidate.expected_annual_cost / 10000)}</span>
-                                {#if isOptimal}
-                                    <span class="star">★</span>
-                                {/if}
-                            </td>
-                            <td class="remark" data-label="비고">
-                                {#if isOptimal}
-                                    <div class="optimal-badge">
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                                            <polyline points="20 6 9 17 4 12"/>
-                                        </svg>
-                                        <strong>최적</strong>
-                                    </div>
-                                {:else if candidate.waste_probability > 85}
-                                    <div class="risk-badge risk-high waste">과다 리스크 높음</div>
-                                {:else if candidate.waste_probability > 70}
-                                    <div class="risk-badge risk-medium waste">과다 주의</div>
-                                {:else if candidate.overage_probability > 85}
-                                    <div class="risk-badge risk-high overage">과소 리스크 높음</div>
-                                {:else if candidate.overage_probability > 70}
-                                    <div class="risk-badge risk-medium overage">과소 주의</div>
-                                {:else}
-                                    <span class="normal">-</span>
-                                {/if}
-                            </td>
+                    {#if scenarioRows.length === 0}
+                        <tr>
+                            <td colspan="7" class="empty-row"
+                                >최적화 후보 데이터를 불러올 수 없습니다.</td
+                            >
                         </tr>
-                    {/each}
+                    {:else}
+                        {#each scenarioRows as row}
+                            <tr
+                                class:optimal={row.scenario === "optimal"}
+                                class:over={row.scenario === "over"}
+                                class:under={row.scenario === "under"}
+                                class:selected={row.contractKw ===
+                                    selectedContractKw}
+                                on:click={() =>
+                                    handleCandidateSelect(row.contractKw)}
+                            >
+                                <td class="scenario-cell">
+                                    <span class="scenario-tag"
+                                        >{row.scenarioLabel}</span
+                                    >
+                                </td>
+                                <td>{row.contractKw}kW</td>
+                                <td>{formatManwon(row.baseMonthly)} 만원</td>
+                                <td
+                                    >{row.scenario === "over"
+                                        ? `${formatManwon(row.overCostMonthly)} 만원`
+                                        : "-"}</td
+                                >
+                                <td
+                                    >{row.scenario === "under"
+                                        ? `${formatManwon(row.shortageMonthly)} 만원`
+                                        : "-"}</td
+                                >
+                                <td
+                                    >{formatManwon(row.totalLossMonthly)} 만원</td
+                                >
+                                <td class="evaluation">{row.evaluation}</td>
+                            </tr>
+                        {/each}
+                    {/if}
                 </tbody>
             </table>
         </div>
@@ -1395,7 +1890,11 @@
         --accent-tertiary: #fb923c;
         --badge-bg: rgba(129, 140, 248, 0.22);
         --badge-text: #c7d2fe;
-        --table-header-bg: linear-gradient(135deg, rgba(148, 163, 184, 0.28) 0%, rgba(129, 140, 248, 0.24) 100%);
+        --table-header-bg: linear-gradient(
+            135deg,
+            rgba(148, 163, 184, 0.28) 0%,
+            rgba(129, 140, 248, 0.24) 100%
+        );
         --table-header-text: #f8fafc;
         --table-border: rgba(71, 85, 105, 0.65);
         --table-row-alt: rgba(30, 41, 59, 0.82);
@@ -1445,7 +1944,10 @@
         border-radius: 14px;
         padding: clamp(16px, 2.5vw, 20px);
         box-shadow: var(--section-shadow);
-        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+        transition:
+            transform 0.2s ease,
+            box-shadow 0.2s ease,
+            border-color 0.2s ease;
     }
 
     .section:hover {
@@ -1458,7 +1960,11 @@
         margin: 0 0 14px;
         font-size: 1.05rem;
         font-weight: 700;
-        background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+        background: linear-gradient(
+            135deg,
+            var(--accent-primary),
+            var(--accent-secondary)
+        );
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -1470,10 +1976,6 @@
         align-items: center;
         gap: 12px;
         margin-bottom: 8px;
-    }
-
-    .prediction-distribution {
-        border-left: 4px solid var(--accent-primary);
     }
 
     .time-series {
@@ -1518,36 +2020,6 @@
 
     .time-domain-chart {
         height: clamp(240px, 34vw, 320px);
-    }
-
-    .chart-legend {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        margin-top: 14px;
-    }
-
-    .legend-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 0.92rem;
-        color: var(--legend-color);
-    }
-
-    .legend-color {
-        width: 18px;
-        height: 10px;
-        border-radius: 3px;
-        flex-shrink: 0;
-    }
-
-    .legend-color.projection {
-        background: #dc2626;
-    }
-
-    .legend-color.overshoot {
-        background: #fb7185;
     }
 
     .chart-footnote {
@@ -1609,6 +2081,11 @@
         gap: 12px;
     }
 
+    .simulation-summary.overshoot {
+        background: rgba(34, 197, 94, 0.08);
+        border-color: rgba(34, 197, 94, 0.3);
+    }
+
     .summary-header {
         display: flex;
         justify-content: space-between;
@@ -1628,6 +2105,11 @@
         font-weight: 600;
     }
 
+    .simulation-summary.overshoot .model-chip {
+        background: rgba(34, 197, 94, 0.25);
+        color: #16a34a;
+    }
+
     .summary-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -1644,7 +2126,7 @@
         border: 1px solid rgba(251, 113, 133, 0.22);
     }
 
-    :global([data-theme='dark']) .summary-metric {
+    :global([data-theme="dark"]) .summary-metric {
         background: rgba(15, 23, 42, 0.7);
     }
 
@@ -1672,6 +2154,7 @@
         margin-bottom: 14px;
     }
 
+
     .info-badge {
         display: inline-flex;
         align-items: center;
@@ -1690,283 +2173,282 @@
         stroke-width: 2.2;
     }
 
-    .table-container {
+    .scenario-table-container {
+        margin-top: 18px;
+        border: 1px solid var(--section-border);
+        border-radius: 16px;
         overflow-x: auto;
+        background: var(--section-bg);
+        box-shadow: var(--section-shadow);
     }
 
-    table {
+    .scenario-table {
         width: 100%;
-        border-collapse: separate;
-        border-spacing: 0;
-        font-size: 0.92rem;
-        color: var(--text-primary);
+        border-collapse: collapse;
+        font-size: 0.95rem;
+        min-width: 640px;
     }
 
-    thead {
+    .scenario-table thead th {
         background: var(--table-header-bg);
         color: var(--table-header-text);
-    }
-
-    th {
-        padding: 12px 10px;
-        font-weight: 600;
         text-transform: uppercase;
         font-size: 0.78rem;
-        letter-spacing: 0.5px;
-        border: none;
+        letter-spacing: 0.45px;
+        padding: 14px 12px;
         text-align: center;
     }
 
-    th small {
+    .scenario-table thead th small {
         display: block;
-        font-size: 0.7rem;
+        font-size: 0.68rem;
         text-transform: none;
         opacity: 0.8;
+        margin-top: 4px;
     }
 
-    th.sticky-col {
-        position: sticky;
-        left: 0;
-        z-index: 5;
-        background: var(--table-header-bg);
-        box-shadow: 2px 0 4px rgba(15, 23, 42, 0.08);
-    }
-
-    td {
-        padding: 12px 10px;
+    .scenario-table td {
+        padding: 14px 12px;
         text-align: center;
-        border-bottom: 1px solid var(--table-border);
-        transition: background 0.2s ease, color 0.2s ease;
+        border-top: 1px solid var(--table-border);
     }
 
-    td.sticky-col {
-        position: sticky;
-        left: 0;
-        z-index: 4;
+    .scenario-table tbody tr {
         background: var(--section-bg);
-        box-shadow: 2px 0 4px rgba(15, 23, 42, 0.05);
-        font-weight: 700;
-        color: var(--text-primary);
+        transition:
+            background 0.2s ease,
+            color 0.2s ease,
+            transform 0.2s ease,
+            box-shadow 0.2s ease;
+        cursor: pointer;
     }
 
-    td.highlight {
-        font-weight: 700;
+    .scenario-table tbody tr + tr {
+        border-top: 1px solid rgba(148, 163, 184, 0.2);
     }
 
-    tbody tr {
-        background: var(--section-bg);
-        transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-    }
-
-    tbody tr:nth-child(even) {
-        background: var(--table-row-alt);
-    }
-
-    tbody tr:hover {
+    .scenario-table tbody tr:hover {
         transform: translateY(-1px);
-        box-shadow: var(--section-hover-shadow);
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
     }
 
-    tr.optimal {
-        background: var(--optimal-bg) !important;
-        border-left: 4px solid var(--accent-secondary);
-    }
-
-    tr.optimal td {
+    .scenario-table tbody tr.optimal {
+        background: var(--optimal-bg);
         color: var(--optimal-text);
         font-weight: 700;
     }
 
-    tr.optimal td.sticky-col {
-        background: var(--optimal-bg);
+    .scenario-table tbody tr.over {
+        background: rgba(14, 165, 233, 0.08);
     }
 
-    tr.optimal:hover {
-        background: var(--optimal-bg-hover) !important;
+    .scenario-table tbody tr.under {
+        background: rgba(249, 115, 22, 0.08);
     }
 
-    tr.high-overage .overage-data {
-        background: var(--risk-high-bg) !important;
-        color: var(--risk-high-text) !important;
-        font-weight: 600;
+    :global([data-theme="dark"]) .scenario-table tbody tr.over {
+        background: rgba(14, 165, 233, 0.2);
     }
 
-    tr.high-waste .waste-data {
-        background: var(--risk-medium-bg) !important;
-        color: var(--risk-medium-text) !important;
-        font-weight: 600;
+    :global([data-theme="dark"]) .scenario-table tbody tr.under {
+        background: rgba(249, 115, 22, 0.2);
     }
 
-    td.total-cost {
-        background: var(--table-total-bg);
-        color: var(--table-total-text);
-        font-weight: 700;
-        font-size: 1.02rem;
+    .scenario-table tbody tr.selected {
+        outline: 2px solid var(--accent-primary);
+        outline-offset: -2px;
+        box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.25);
     }
 
-    .percentage,
-    .cost-value {
-        font-weight: 600;
+    .scenario-cell {
+        text-align: left;
     }
 
-    .star {
-        color: var(--star-color);
-        font-size: 1.2rem;
-        margin-left: 6px;
-        display: inline-block;
-        animation: pulse 2s ease-in-out infinite;
-    }
-
-    @keyframes pulse {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.15); }
-    }
-
-    .remark {
-        color: var(--text-secondary);
-        font-size: 0.9rem;
-    }
-
-    .optimal-badge {
+    .scenario-tag {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        padding: 6px 12px;
-        border-radius: 999px;
-        background: var(--table-total-bg);
-        color: var(--table-total-text);
-        border: 1px solid var(--optimal-border);
-        font-weight: 700;
-    }
-
-    .optimal-badge svg {
-        width: 16px;
-        height: 16px;
-        stroke-width: 2.4;
-    }
-
-    .risk-badge {
-        display: inline-block;
-        padding: 6px 12px;
+        padding: 4px 12px;
         border-radius: 999px;
         font-size: 0.78rem;
         font-weight: 600;
-        line-height: 1;
+        background: rgba(79, 70, 229, 0.12);
+        color: var(--accent-primary);
     }
 
-    .risk-badge.risk-high {
-        background: var(--risk-high-bg);
-        color: var(--risk-high-text);
+    .scenario-table tbody tr.over .scenario-tag {
+        background: rgba(14, 165, 233, 0.15);
+        color: #0284c7;
     }
 
-    .risk-badge.risk-medium {
-        background: var(--risk-medium-bg);
-        color: var(--risk-medium-text);
+    .scenario-table tbody tr.under .scenario-tag {
+        background: rgba(249, 115, 22, 0.18);
+        color: #c2410c;
     }
 
-    .normal {
-        color: var(--text-secondary);
+    .scenario-table tbody tr.optimal .scenario-tag {
+        background: var(--table-total-bg);
+        color: var(--table-total-text);
     }
 
-    tbody tr {
-        cursor: pointer;
-    }
-
-    tr.selected {
-        background: var(--output-bg) !important;
-        box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.32);
-        border-left: 4px solid var(--accent-primary);
-        transform: translateY(-1px);
-    }
-
-    tr.selected td {
+    .scenario-table td.evaluation {
+        font-weight: 700;
         color: var(--text-primary);
     }
 
-    tr.selected td.sticky-col {
-        background: var(--output-bg) !important;
+    .scenario-table .empty-row {
+        text-align: center;
+        padding: 36px 12px;
+        color: var(--text-secondary);
     }
 
-    td.contract-value {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
+    @media (max-width: 640px) {
+        .scenario-table {
+            min-width: 100%;
+            font-size: 0.9rem;
+        }
 
-    .toggle-indicator {
-        position: relative;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 20px;
-        height: 20px;
-        border-radius: 50%;
-        border: 2px solid rgba(79, 70, 229, 0.35);
-        background: transparent;
-        cursor: pointer;
-        transition: all 0.2s ease;
-        padding: 0;
-    }
-
-    .toggle-indicator span[aria-hidden="true"] {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: transparent;
-        transition: background 0.2s ease;
-    }
-
-    .toggle-indicator:hover {
-        border-color: var(--accent-primary);
-        box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.12);
-    }
-
-    .toggle-indicator:focus-visible {
-        outline: none;
-        border-color: var(--accent-primary);
-        box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.18);
-    }
-
-    .toggle-indicator.active {
-        border-color: var(--accent-primary);
-        background: rgba(79, 70, 229, 0.14);
-    }
-
-    .toggle-indicator.active span[aria-hidden="true"] {
-        background: var(--accent-primary);
-    }
-
-    .contract-text {
-        font-size: 1.05rem;
-        font-weight: 700;
-    }
-
-    .selected-tag {
-        display: inline-flex;
-        align-items: center;
-        padding: 4px 10px;
-        border-radius: 999px;
-        background: rgba(79, 70, 229, 0.18);
-        color: var(--accent-primary);
-        font-size: 0.72rem;
-        font-weight: 700;
-        letter-spacing: 0.4px;
-        text-transform: uppercase;
-    }
-
-    .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
-        white-space: nowrap;
-        border: 0;
+        .scenario-table td,
+        .scenario-table th {
+            padding: 10px 8px;
+        }
     }
 
     /* Scenario/conclusion UI styles removed as markup no longer renders those sections */
+
+    /* Validation Info Banner */
+    .validation-info-banner {
+        margin-top: 16px;
+        padding: 20px;
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(16, 185, 129, 0.05));
+        border: 2px solid rgba(59, 130, 246, 0.2);
+        border-radius: 14px;
+    }
+
+    .info-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+    }
+
+    .info-icon {
+        font-size: 1.5rem;
+    }
+
+    .info-header h5 {
+        margin: 0;
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+
+    .info-description {
+        margin: 12px 0;
+        font-size: 0.95rem;
+        line-height: 1.8;
+        color: var(--text-primary);
+    }
+
+    .highlight-green {
+        color: #10b981;
+        font-weight: 600;
+    }
+
+    .highlight-red {
+        color: #ef4444;
+        font-weight: 600;
+    }
+
+    .highlight-blue {
+        color: #3b82f6;
+        font-weight: 600;
+    }
+
+    .validation-metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+        margin: 16px 0;
+    }
+
+    .metric-card {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 10px;
+    }
+
+    :global([data-theme="dark"]) .metric-card {
+        background: rgba(15, 23, 42, 0.6);
+        border-color: rgba(148, 163, 184, 0.3);
+    }
+
+    .metric-label {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        font-weight: 500;
+    }
+
+    .metric-value {
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+
+    .metric-value.consistency-양호 {
+        color: #10b981;
+    }
+
+    .metric-value.consistency-보통 {
+        color: #f59e0b;
+    }
+
+    .metric-value.consistency-개선\ 필요 {
+        color: #ef4444;
+    }
+
+    .info-note {
+        margin: 12px 0 0 0;
+        padding: 12px;
+        background: rgba(59, 130, 246, 0.1);
+        border-left: 3px solid #3b82f6;
+        border-radius: 6px;
+        font-size: 0.9rem;
+        line-height: 1.6;
+        color: var(--text-primary);
+    }
+
+    /* Loading State */
+    .loading-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 60px 20px;
+        gap: 16px;
+    }
+
+    .loading-spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid rgba(79, 70, 229, 0.2);
+        border-top-color: #4f46e5;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    .loading-state p {
+        font-size: 1rem;
+        color: var(--text-secondary);
+        margin: 0;
+    }
 
     @media (max-width: 1200px) {
         .chart-sections {
@@ -1988,67 +2470,9 @@
         }
     }
 
-    @media (max-width: 640px) {
-        .table-container {
-            overflow-x: visible;
-        }
-
-        table,
-        thead,
-        tbody,
-        th,
-        td,
-        tr {
-            display: block;
-        }
-
-        thead {
-            display: none;
-        }
-
-        tbody tr {
-            margin-bottom: 16px;
-            border: 1px solid var(--section-border);
-            border-radius: 12px;
-            padding: 12px 14px;
-            background: var(--section-bg);
-            box-shadow: var(--section-shadow);
-        }
-
-        td {
-            text-align: right;
-            padding: 10px 0 10px 120px;
-            border-bottom: 1px solid var(--table-border);
-            position: relative;
-        }
-
-        td::before {
-            content: attr(data-label);
-            position: absolute;
-            left: 0;
-            top: 50%;
-            transform: translateY(-50%);
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-align: left;
-        }
-
-        td:last-child {
-            border-bottom: none;
-        }
-
-        td.sticky-col {
-            position: static;
-            padding-left: 0;
-            text-align: left;
-            font-size: 1rem;
-        }
-    }
-
     @media (prefers-reduced-motion: reduce) {
         .section,
-        tbody tr,
-        .star {
+        .scenario-table tbody tr {
             transition: none;
             animation: none;
         }

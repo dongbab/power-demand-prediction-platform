@@ -28,6 +28,7 @@ class ContractCandidate:
     session_waste_probability: Optional[float] = None
     session_average_waste_kw: Optional[float] = None
     session_sample_size: Optional[int] = None
+    session_expected_waste_cost: Optional[float] = None
 
 
 @dataclass
@@ -81,17 +82,23 @@ class ContractOptimizer:
         self,
         cost_calculator: Optional[KEPCOCostCalculator] = None,
         candidate_step: int = 10,  # 10kW 단위
-        charger_type: Optional[str] = None
+        charger_type: Optional[str] = None,
+        over_contract_headroom_kw: int = 40,
+        minimum_over_contract_kw: int = 120
     ):
         """
         Args:
             cost_calculator: 비용 계산기 (기본값: 새 인스턴스)
             candidate_step: 후보 간격 (kW) - 기본 10kW
             charger_type: 충전기 타입 (완속/급속)
+            over_contract_headroom_kw: 예측분포 상단 이후로 추가 탐색할 여유 (kW)
+            minimum_over_contract_kw: 과다 계약 비교를 위해 항상 포함할 최소 상단 kW
         """
         self.cost_calculator = cost_calculator or KEPCOCostCalculator()
         self.candidate_step = candidate_step
         self.charger_type = charger_type
+        self.over_contract_headroom_kw = max(0, over_contract_headroom_kw)
+        self.minimum_over_contract_kw = max(minimum_over_contract_kw, candidate_step)
         self.logger = logging.getLogger(__name__)
         
     def optimize_contract(
@@ -104,7 +111,8 @@ class ContractOptimizer:
         min_contract_kw: int = 10,
         max_contract_kw: int = 200,
         risk_tolerance: float = 0.1,  # 0.0 (보수적) ~ 1.0 (공격적)
-        session_prediction_series: Optional[List[Dict[str, Any]]] = None
+        session_prediction_series: Optional[List[Dict[str, Any]]] = None,
+        candidate_range_override: Optional[Tuple[int, int]] = None
     ) -> OptimizationResult:
         """
         계약전력 최적화 실행
@@ -119,6 +127,7 @@ class ContractOptimizer:
             max_contract_kw: 최대 계약전력
             risk_tolerance: 리스크 허용도 (0=보수적, 1=공격적)
             session_prediction_series: 세션 기반 예측 시계열 (OPTIONAL)
+            candidate_range_override: (min, max) 튜플로 직접 후보 범위를 지정
             
         Returns:
             OptimizationResult: 최적화 결과
@@ -142,11 +151,24 @@ class ContractOptimizer:
         )
         
         # 1. 후보 범위 결정
-        candidate_range = self._determine_candidate_range(
-            prediction_distribution,
-            min_contract_kw,
-            max_contract_kw
-        )
+        if candidate_range_override is not None:
+            override_min, override_max = candidate_range_override
+            if override_min >= override_max:
+                raise ValueError("candidate_range_override 상단이 하단보다 커야 합니다.")
+            range_min = max(min_contract_kw, override_min)
+            range_max = min(max_contract_kw, override_max)
+            range_min = int(np.floor(range_min / self.candidate_step)) * self.candidate_step
+            range_max = int(np.ceil(range_max / self.candidate_step)) * self.candidate_step
+            if range_min >= range_max:
+                range_max = range_min + self.candidate_step * 2
+                range_max = min(max_contract_kw, range_max)
+            candidate_range = (range_min, range_max)
+        else:
+            candidate_range = self._determine_candidate_range(
+                prediction_distribution,
+                min_contract_kw,
+                max_contract_kw
+            )
         
         self.logger.info(
             f"후보 범위: {candidate_range[0]}kW ~ {candidate_range[1]}kW "
@@ -243,6 +265,17 @@ class ContractOptimizer:
             range_min = max(min_kw, adjusted_min)
             range_max = min(max_kw, adjusted_max)
         
+        # 과다계약 비교를 위해 여유 구간 확보 (최소 100kW 이상 포함)
+        padded_max = max(
+            range_max + self.over_contract_headroom_kw,
+            self.minimum_over_contract_kw
+        )
+        padded_max_aligned = int(np.ceil(padded_max / self.candidate_step)) * self.candidate_step
+        range_max = min(
+            max_kw,
+            max(range_min + self.candidate_step, padded_max_aligned)
+        )
+        
         # 최악의 경우라도 상·하한이 같지 않도록 보정
         if range_min >= range_max:
             range_min = max(min_kw, range_max - self.candidate_step * 2)
@@ -293,7 +326,8 @@ class ContractOptimizer:
                 session_max_overshoot_kw=session_metrics.get("session_max_overshoot_kw") if session_metrics else None,
                 session_waste_probability=session_metrics.get("session_waste_probability") if session_metrics else None,
                 session_average_waste_kw=session_metrics.get("session_average_waste_kw") if session_metrics else None,
-                session_sample_size=session_metrics.get("session_sample_size") if session_metrics else None
+                session_sample_size=session_metrics.get("session_sample_size") if session_metrics else None,
+                session_expected_waste_cost=session_metrics.get("session_expected_waste_cost") if session_metrics else None
             )
             
             candidates.append(candidate)
@@ -384,6 +418,17 @@ class ContractOptimizer:
             "session_waste_probability": (len(waste) / total * 100) if total else None,
             "session_average_waste_kw": _avg(waste)
         }
+
+        basic_rate = self.cost_calculator.BASIC_RATE_PER_KW
+        annual_multiplier = basic_rate * 12
+        if (
+            metrics["session_waste_probability"] is not None and
+            metrics["session_average_waste_kw"] is not None
+        ):
+            expected_waste_kw = metrics["session_average_waste_kw"] * (metrics["session_waste_probability"] / 100)
+            metrics["session_expected_waste_cost"] = expected_waste_kw * annual_multiplier
+        else:
+            metrics["session_expected_waste_cost"] = None
 
         return metrics
     

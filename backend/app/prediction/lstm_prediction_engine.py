@@ -1,8 +1,3 @@
-"""
-PyTorch 기반 LSTM 예측 엔진
-TensorFlow에서 PyTorch로 마이그레이션
-"""
-
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, List, Optional, Tuple
@@ -400,35 +395,41 @@ class LSTMPredictionEngine:
     ) -> np.ndarray:
         """
         Monte Carlo Dropout을 사용한 불확실성 추정
-        
+
         Args:
             data: 입력 데이터프레임
             power_data: 전력 데이터
             n_iterations: Monte Carlo 시뮬레이션 반복 횟수
-            
+
         Returns:
             np.ndarray: 예측 분포 (shape: (n_iterations,))
         """
         try:
+            # 모델이 없으면 통계 기반 분포 반환
+            if self.model is None or not PYTORCH_AVAILABLE:
+                mean = np.mean(power_data)
+                std = np.std(power_data)
+                return np.random.normal(mean, std, n_iterations)
+
             # 특징 추출
             features = self._extract_features(data, power_data)
-            
+
             if len(features) < self.sequence_length:
                 # 데이터 부족 시 통계 기반 분포 생성
                 mean = np.mean(power_data)
                 std = np.std(power_data)
                 return np.random.normal(mean, std, n_iterations)
-            
+
             # 마지막 시퀀스로 예측
             last_sequence = features[-self.sequence_length:]
-            
+
             # PyTorch 텐서로 변환
             x_tensor = torch.FloatTensor(last_sequence).unsqueeze(0)  # (1, seq_len, features)
             if self.device:
                 x_tensor = x_tensor.to(self.device)
-            
+
             predictions = []
-            
+
             # Monte Carlo Dropout: 모델을 train mode로 설정하여 dropout 활성화
             self.model.train()
             

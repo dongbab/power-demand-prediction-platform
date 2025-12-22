@@ -5,7 +5,7 @@
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 from dataclasses import dataclass, asdict
 
@@ -94,11 +94,17 @@ class RecommendationEngine:
         self.logger.info(f"Station {station_id}: 계약전력 추천 생성 시작")
         
         # 1. 최적화 실행
+        effective_session_series = session_prediction_series or session_power_series or []
+        optimizer_options = dict(optimizer_kwargs)
+        optimizer_options.setdefault("min_contract_kw", 30)
+        optimizer_options.setdefault("max_contract_kw", 150)
+        optimizer_options.setdefault("candidate_range_override", (30, 150))
+
         optimization = self.optimizer.optimize_contract(
             prediction_distribution=prediction_distribution,
             current_contract_kw=current_contract_kw,
-            session_prediction_series=session_prediction_series,
-            **optimizer_kwargs
+            session_prediction_series=effective_session_series,
+            **optimizer_options
         )
         
         # 2. 예측 통계 계산
@@ -133,7 +139,7 @@ class RecommendationEngine:
             prediction_distribution,
             historical_peak_series,
             session_power_series,
-            session_prediction_series
+            effective_session_series
         )
         
         recommendation = ContractRecommendation(
@@ -164,6 +170,36 @@ class RecommendationEngine:
         )
         
         return recommendation
+
+    def _estimate_contract_ceiling(
+        self,
+        distribution: Any,
+        current_contract_kw: Optional[int]
+    ) -> int:
+        """과다 계약 비교를 위한 동적 상한 계산"""
+
+        try:
+            dist_array = np.asarray(distribution, dtype=float)
+        except Exception:
+            dist_array = np.array([])
+
+        if dist_array.size == 0:
+            base_kw = float(current_contract_kw or 120)
+        else:
+            p95 = float(np.percentile(dist_array, 95))
+            p99 = float(np.percentile(dist_array, 99))
+            base_kw = max(p99, p95 + 10.0)
+
+        if current_contract_kw:
+            base_kw = max(base_kw, float(current_contract_kw))
+
+        step = getattr(self.optimizer, "candidate_step", 10) or 10
+        headroom = max(40.0, step * 3)
+        target_kw = max(base_kw + headroom, getattr(self.optimizer, "minimum_over_contract_kw", 120))
+        padded_kw = int(np.ceil(target_kw / step) * step)
+        hard_cap = 400
+
+        return min(hard_cap, max(step, padded_kw))
     
     def _generate_detailed_reasoning(
         self,
@@ -218,35 +254,56 @@ class RecommendationEngine:
         reasons.append(
             "🎯 10kW 단위 미세 조정으로 비용 최적화 달성"
         )
-        
+
         return reasons
-    
+
     def _assess_action_urgency(
         self,
         optimization: OptimizationResult,
-        current_contract: Optional[int]
-    ) -> tuple[bool, str]:
-        """액션 긴급도 평가"""
-        if current_contract is None:
-            return True, "high"  # 신규 계약 필요
-        
-        if optimization.expected_savings is None:
-            return False, "low"
-        
-        # 절감액 기준
-        annual_savings = optimization.expected_savings
-        
-        if annual_savings > 1000000:  # 100만원 이상
+        current_contract_kw: Optional[int]
+    ) -> Tuple[bool, str]:
+        """
+        액션 긴급도 평가
+
+        Returns:
+            (action_required, urgency_level): 액션 필요 여부와 긴급도
+        """
+        # 현재 계약이 없으면 즉시 조치 필요
+        if current_contract_kw is None:
             return True, "high"
-        elif annual_savings > 500000:  # 50만원 이상
+
+        # 절감액이 크면 긴급도 높음
+        if optimization.expected_savings:
+            monthly_savings = optimization.expected_savings / 12
+            if monthly_savings > 100000:  # 월 10만원 이상
+                return True, "high"
+            elif monthly_savings > 50000:  # 월 5만원 이상
+                return True, "medium"
+
+        # 초과 위험이 높으면 긴급도 높음
+        if optimization.overage_probability > 20:
+            return True, "high"
+        elif optimization.overage_probability > 10:
             return True, "medium"
-        elif annual_savings > 100000:  # 10만원 이상
+
+        # 과다 계약 낭비가 심하면 조치 필요
+        if optimization.waste_probability > 70:
+            return True, "medium"
+        elif optimization.waste_probability > 50:
             return True, "low"
-        elif annual_savings < -500000:  # 50만원 이상 손해
-            return True, "high"  # 계약 상향 필요
-        else:
-            return False, "low"  # 현행 유지
-    
+
+        # 계약 전력 차이가 크면 조치 필요
+        contract_diff = abs(optimization.optimal_contract_kw - current_contract_kw)
+        if contract_diff >= 30:
+            return True, "high"
+        elif contract_diff >= 20:
+            return True, "medium"
+        elif contract_diff >= 10:
+            return True, "low"
+
+        # 그 외에는 조치 불필요
+        return False, "low"
+
     def _prepare_cost_comparison(
         self,
         optimization: OptimizationResult,
@@ -261,7 +318,7 @@ class RecommendationEngine:
                     "annual_cost": optimization.expected_annual_cost
                 }
             }
-        
+
         return {
             "has_comparison": True,
             "current": {
@@ -297,7 +354,8 @@ class RecommendationEngine:
                 "session_max_overshoot_kw": c.session_max_overshoot_kw,
                 "session_waste_probability": c.session_waste_probability,
                 "session_average_waste_kw": c.session_average_waste_kw,
-                "session_sample_size": c.session_sample_size
+                "session_sample_size": c.session_sample_size,
+                "session_expected_waste_cost": c.session_expected_waste_cost
             }
             for c in sorted(candidates, key=lambda x: x.contract_kw)
         ]
@@ -312,14 +370,15 @@ class RecommendationEngine:
     ) -> Dict[str, Any]:
         """최적화 상세 데이터 준비 (시각화용)"""
         import numpy as np
+        series_for_metrics = session_prediction_series or session_series or []
         shortfall_simulations = self._build_shortfall_simulations(
             optimization.all_candidates,
             distribution,
             historical_peaks,
-            session_prediction_series
+            series_for_metrics
         )
         session_prediction_assessment = self._build_session_prediction_assessment(
-            session_prediction_series,
+            series_for_metrics,
             optimization.all_candidates
         )
 
@@ -340,7 +399,14 @@ class RecommendationEngine:
                     "overage_probability": c.overage_probability,
                     "waste_probability": c.waste_probability,
                     "cost_std": c.cost_std,
-                    "risk_score": c.risk_score
+                    "risk_score": c.risk_score,
+                    "session_overage_probability": c.session_overage_probability,
+                    "session_average_overshoot_kw": c.session_average_overshoot_kw,
+                    "session_max_overshoot_kw": c.session_max_overshoot_kw,
+                    "session_waste_probability": c.session_waste_probability,
+                    "session_average_waste_kw": c.session_average_waste_kw,
+                    "session_sample_size": c.session_sample_size,
+                    "session_expected_waste_cost": c.session_expected_waste_cost
                 }
                 for c in sorted(optimization.all_candidates, key=lambda x: x.contract_kw)
             ],
@@ -358,7 +424,7 @@ class RecommendationEngine:
             "savings_percent": optimization.savings_percent,
             "daily_peak_series": historical_peaks or [],
             "session_power_series": session_series or [],
-            "session_prediction_series": session_prediction_series or [],
+            "session_prediction_series": session_prediction_series or session_series or [],
             "contract_shortfall_simulations": shortfall_simulations,
             "session_prediction_assessment": session_prediction_assessment
         }
@@ -421,6 +487,7 @@ class RecommendationEngine:
                     "session_max_overshoot_kw": c.session_max_overshoot_kw,
                     "session_waste_probability": c.session_waste_probability,
                     "session_average_waste_kw": c.session_average_waste_kw,
+                    "session_expected_waste_cost": c.session_expected_waste_cost,
                     "session_sample_size": c.session_sample_size
                 }
                 for c in sorted(candidates, key=lambda item: item.contract_kw)
@@ -459,6 +526,17 @@ class RecommendationEngine:
             "session_waste_probability": (len(waste_points) / total * 100) if total else None,
             "session_average_waste_kw": _avg(waste_magnitudes)
         }
+
+        basic_rate = self.cost_calculator.BASIC_RATE_PER_KW
+        annual_multiplier = basic_rate * 12
+        if (
+            summary["session_waste_probability"] is not None and
+            summary["session_average_waste_kw"] is not None
+        ):
+            expected_waste_kw = summary["session_average_waste_kw"] * (summary["session_waste_probability"] / 100)
+            summary["session_expected_waste_cost"] = expected_waste_kw * annual_multiplier
+        else:
+            summary["session_expected_waste_cost"] = None
 
         samples = [
             {

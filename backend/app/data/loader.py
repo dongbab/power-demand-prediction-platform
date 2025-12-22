@@ -212,7 +212,6 @@ class ChargingDataLoader:
             # 디버깅: 실제 데이터에서 고유값 확인 (필터링 전)
             unique_stations = df[station_col].unique()
             print(f"전체 충전소 수: {len(unique_stations)}")
-            print(f"사용 가능한 충전소 ID (처음 10개): {list(unique_stations[:10])}")
             
             # 실제 필터링 수행
             df_filtered = df[df[station_col] == self.station_id]

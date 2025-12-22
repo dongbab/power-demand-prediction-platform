@@ -1,20 +1,24 @@
-# ⚡ 충전소 전력 수요 예측 시스템 
 
-EV 충전소의 전력 수요를 예측하고 최적의 계약전력을 추천하는 지능형 시스템입니다.
+# ⚡ 충전소 전력 수요 예측 플랫폼 (Phase 3)
+
+EV 충전소의 전력 수요를 예측하고, 최적의 계약전력과 비용 절감 방안을 추천하는 AI 기반 통합 플랫폼입니다.
+프론트엔드-백엔드 완전 통합, PyTorch 기반 LSTM/XGBoost 앙상블, 동적 패턴 분석, 확률·비용 시뮬레이션, 보안 진단까지 모두 지원합니다.
+
 
 ## 🚀 빠른 시작
 
 ### 🏃‍♂️ 1단계: 시스템 요구사항 확인
 ```bash
-# Python 3.8+ 필요
+# Python 3.8+ 필요 (권장: Python 3.10+)
 python --version
 
 # 통합 진단 도구 실행 (권장)
-python debug_consolidated.py --station BNS0061
+python debug_consolidated.py --station BNS0061 --test all
 ```
 
 ### 🔧 2단계: 환경 설정
 ```bash
+
 # 1. 환경변수 파일 복사 (선택사항)
 cp .env .env.local  # 로컬 개발용
 cp .env.production .env.prod  # 프로덕션용
@@ -27,11 +31,8 @@ cp .env.production .env.prod  # 프로덕션용
 ```bash
 # 백엔드 의존성 설치
 cd backend
-pip install -r requirements.txt
-
-# 또는 가상 환경 사용 (권장)
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
@@ -40,8 +41,7 @@ pip install -r requirements.txt
 # 데이터 디렉토리에 CSV 파일 복사
 mkdir -p data/raw
 cp your_charging_data.csv data/raw/
-
-# 또는 웹 UI에서 업로드 가능
+# 또는 웹 UI에서 업로드 가능 (대시보드 → CSV 업로드)
 ```
 
 ### 🌐 4단계: 서버 실행
@@ -57,65 +57,89 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 32375 --reload
 
 # 프론트엔드 서버 (별도 터미널)
 cd frontend
+npm install
 npm run dev
 ```
 
 ### ✅ 5단계: 동작 확인
-- API 서버: `http://220.69.200.55:32375`
-- API 문서: `http://220.69.200.55:32375/docs`
-- 프론트엔드: `http://220.69.200.55:32376`
-- 로컬 개발시: `http://localhost:32376`
+- API 서버: `http://127.0.0.1:8000` 또는 `http://220.69.200.55:32375`
+- API 문서: `/docs` (Swagger UI)
+- 프론트엔드: `http://localhost:5173` 또는 `http://220.69.200.55:32376`
+- 대시보드: `/dashboard/{stationId}`
 
-## 🔍 주요 기능
 
-### 🔄 동적 패턴 분석 예측
-- **실제 데이터 기반 패턴 학습**: 정적 요인 대신 데이터에서 패턴 추출
-- **앙상블 예측 모델**: 8가지 통계/ML 모델 조합으로 정확도 향상
-- **충전소별 특화**: 각 충전소의 고유 사용 패턴 자동 반영
-- **신뢰도 기반 조정**: 데이터 품질에 따른 적응형 예측
+## 🔍 주요 기능 및 아키텍처
+
+
+### 🔄 동적 패턴 분석 & 앙상블 예측
+- **Dynamic Pattern**: 실제 데이터에서 계절/요일/시간대별 패턴 자동 추출, 신뢰도 기반 적응형 예측
+- **Ensemble AI**: LSTM(PyTorch) + XGBoost + 통계모델 8종 앙상블, 계약전력/비용/위험도 예측
+- **확률·비용 시뮬레이션**: 과소/최적/과다/현재/사용자 지정 계약별 연간 비용, 초과·낭비 확률 분석
+- **실시간 대시보드**: Chart.js 기반 예측/비용/위험도 시각화, 다크모드, 반응형 UI
+- **통합 진단/디버그**: `debug_consolidated.py`로 데이터·패턴·API·모델·여러 충전소 일괄 점검
+- **보안 진단**: 인증/인가, 파일 업로드, 입력 검증, CORS, Docker, 로깅 등 취약점 리포트 및 권고
 
 ### 💡 계약전력 추천
 - 데이터 기반 최적 계약전력 산출
 - 안전 마진 자동 적용
 - 월별 변동성 고려
 
+### 💰 비용 및 초과금 산정 기준
+- **총 비용(연간)** = `(계약전력 kW × 기본요금 8,320원 × 12개월) + (예상 초과전력 kW × 8,320원 × 1.5 × 12개월)`
+	- 첫 항은 계약전력에 대한 연간 기본요금입니다.
+	- 두 번째 항은 예측된 피크가 계약전력을 넘는 경우에만 발생하는 **초과 부가금(KEPCO 벌금)** 으로, `backend/app/contract/cost_calculator.py` 의 `KEPCOCostCalculator.compute_total_cost`와 동일한 식을 따릅니다.
+- **예상 초과금** = `예상 초과전력 kW × 8,320원 × 1.5 × 12개월`
+	- 대시보드의 “예상 초과금” 열은 위 벌금 항만 분리해 보여주며, `peak_kw`가 계약전력을 초과할 확률과 초과 폭을 기반으로 산출됩니다.
+- **예상 위험 기여도** = `연간 초과 부가금 × 과소(부족) 발생 확률`
+	- 과소 확률(예: 계약전력 부족 위험)이 높을수록 해당 초과금의 기대값이 커지므로, UI에서는 이 값을 위험지표로 함께 노출합니다.
+
+> 참고: 위 식들은 ⚙️ `KEPCOCostCalculator` ( `backend/app/contract/cost_calculator.py` )에서 사용되는 상수 `BASIC_RATE_PER_KW = 8320`과 `SHORTAGE_MULTIPLIER = 1.5`를 그대로 반영합니다. 프런트엔드의 툴팁/도움말과 문서화에도 동일한 수치를 사용해 일관성을 유지하세요.
+
 ### 📊 실시간 대시보드
 - 인터랙티브 차트 및 그래프
 - 실시간 데이터 모니터링
 - 반응형 웹 디자인
 
-## 🏗️ 시스템 아키텍처
+
+## 🏗️ 시스템 아키텍처 (최신)
+
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │   Backend       │    │   Data Layer    │
-│   (SvelteKit)   │◄──►│   (FastAPI)     │◄──►│   (CSV/DB)      │
-│                 │    │                 │    │                 │
-│ • 대시보드      │    │ • REST API      │    │ • 충전 이력     │
-│ • 차트/그래프   │    │ • 예측 엔진     │    │ • 파일 저장     │
-│ • 관리 도구     │    │ • 데이터 처리   │    │ • 캐시 시스템   │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                Power Demand Prediction Platform           │
+├────────────────────────────────────────────────────────────┤
+│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐   │
+│  │   Frontend    │  │   Backend     │  │   Data Layer  │   │
+│  │ (SvelteKit)   │◄─┼─►(FastAPI)    │◄─┼─►(CSV/DB)      │   │
+│  │  • 대시보드   │  │  • REST API   │  │  • 충전 이력   │   │
+│  │  • 비용분석   │  │  • 예측엔진   │  │  • 파일저장    │   │
+│  │  • 위험분석   │  │  • AI모델     │  │  • 캐시        │   │
+│  │  • 관리도구   │  │  • 패턴분석   │  │               │   │
+│  └───────────────┘  └───────────────┘  └───────────────┘   │
+└────────────────────────────────────────────────────────────┘
 ```
+
 
 ## 🛠️ 기술 스택
 
+
 ### Backend
 - **FastAPI**: 고성능 Python 웹 프레임워크
-- **Pandas**: 데이터 분석 및 처리
-- **NumPy**: 수치 계산
-- **SciPy**: 고급 통계 분석 및 극값 이론
+- **PyTorch**: LSTM 딥러닝 예측 (GPU 지원)
+- **XGBoost**: 부스팅 기반 예측
+- **Pandas/NumPy/SciPy**: 데이터 분석/통계/극값 이론
 - **Uvicorn**: ASGI 서버
 
-### Frontend (선택사항)
+### Frontend
 - **SvelteKit**: 모던 웹 프레임워크
 - **Chart.js**: 인터랙티브 차트
 - **Tailwind CSS**: 유틸리티 CSS 프레임워크
 
-### DevOps
-- **Docker**: 컨테이너화
-- **Docker Compose**: 멀티 컨테이너 관리
+### DevOps/Infra
+- **Docker/Docker Compose**: 멀티 컨테이너 관리
 
-## 📁 프로젝트 구조
+
+## 📁 프로젝트 구조 (주요)
 
 ```
 power-demand-prediction-platform/
@@ -124,7 +148,7 @@ power-demand-prediction-platform/
 │   │   ├── api/            # API 라우트
 │   │   ├── core/           # 핵심 설정/로깅
 │   │   ├── data/           # 데이터 로더/검증
-│   │   ├── features/       # 특성 추출
+│   │   ├── features/       # 특성 추출 (Phase3 이후 미사용)
 │   │   ├── models/         # 예측 모델
 │   │   ├── services/       # 비즈니스 로직
 │   │   └── main.py        # 앱 진입점
@@ -132,7 +156,7 @@ power-demand-prediction-platform/
 │   └── Dockerfile
 ├── frontend/               # 프론트엔드 (SvelteKit)
 │   ├── src/
-│   │   ├── components/    # 재사용 컴포넌트
+│   │   ├── components/    # 재사용 컴포넌트 (EnsemblePrediction, ProbabilityCostAnalysis 등)
 │   │   ├── routes/        # 페이지 라우트
 │   │   └── services/      # API 통신
 │   └── package.json
@@ -140,15 +164,17 @@ power-demand-prediction-platform/
 │   └── raw/              # CSV 파일
 ├── logs/                 # 로그 파일
 ├── .env                  # 환경 변수
-├── debug_tool.py        # 시스템 진단 도구
+├── debug_consolidated.py # 통합 진단 도구
 └── docker-compose.yml   # 컨테이너 설정
 ```
 
-## ⚙️ 환경 설정
+
+## ⚙️ 환경 설정 및 보안
 
 ### 🔐 주요 환경변수
 
-시스템은 민감한 정보를 환경변수로 관리합니다:
+
+시스템은 민감한 정보를 환경변수로 관리합니다. (API 키 인증, CORS, 파일 업로드 제한 등 보안 권고 적용 필요)
 
 ```bash
 # 서버 설정
@@ -189,40 +215,34 @@ UVICORN_WORKERS=4
 docker-compose up -d
 ```
 
-## 🔧 API 엔드포인트
+
+## 🔧 주요 API 엔드포인트 (요약)
+
 
 ### 📊 데이터 관리
-```http
-GET /api/stations                    # 충전소 목록
-GET /api/station-analysis/{id}       # 충전소 상세 분석
-POST /api/admin/upload-csv           # CSV 파일 업로드
-GET /api/status                      # 시스템 상태
-```
+- `GET /api/stations` : 충전소 목록
+- `POST /api/admin/upload-csv` : CSV 업로드 (인증 필요 권고)
+- `GET /api/status` : 시스템 상태
 
-### 🔮 예측 서비스
-```http
-GET /api/predict/{station_id}        # 전력 예측
-GET /api/stations/{id}/prediction    # 예측 차트 데이터
-GET /api/stations/{id}/monthly-contract  # 계약전력 추천
-```
+### 🔮 예측/분석 서비스
+- `GET /api/stations/{station_id}/ensemble-prediction?current_contract_kw=100` : LSTM+XGBoost 앙상블 예측, 계약전력/비용/위험도/성숙도 분석
+- `GET /api/stations/{station_id}/prediction` : 동적 패턴 기반 최고전력 예측 (Dynamic+SARIMA)
+- `GET /api/stations/{station_id}/monthly-contract` : 월별 계약전력 추천
+- `GET /api/stations/{station_id}/timeseries` : 시계열 데이터
 
-### 📈 분석 도구
-```http
-GET /api/stations/{id}/timeseries    # 시계열 데이터
-GET /api/data-range/{id}            # 데이터 범위 확인
-GET /api/stations/{id}/timeseries.csv  # CSV 내보내기
-```
 
-## 🐛 문제 해결
+## 🐛 문제 해결 & 디버깅
 
-### ❗ 자주 발생하는 문제
+
+### ❗ 자주 발생하는 문제 (통합 진단 도구 활용)
 
 #### 1. 패키지 의존성 오류
 **증상**: `ModuleNotFoundError: No module named 'fastapi'`
 **해결책**:
 ```bash
+
 # 통합 진단 도구 실행
-python debug_consolidated.py --station BNS0061 --test data
+python debug_consolidated.py --station BNS0061 --test all
 
 # 수동 설치
 pip install fastapi pandas numpy uvicorn
@@ -306,7 +326,8 @@ import logging
 logging.getLogger("performance").setLevel(logging.INFO)
 ```
 
-## 📝 데이터 형식
+
+## 📝 데이터/CSV 형식
 
 ### CSV 파일 요구사항
 ```csv
@@ -325,16 +346,18 @@ BNS0001,2024-01-01 14:20:00,2024-01-01 15:45:00,52.1,32.8
 - **충전량**: 총 충전량 (kWh)
 - **충전소명**: 충전소 이름
 
-## 🚀 배포
+
+## 🚀 배포 및 운영
+
 
 ### Docker를 이용한 배포
 ```bash
 # 전체 시스템 시작
 docker-compose up -d
-
 # 개별 서비스 시작
 docker-compose up backend -d
 ```
+
 
 ### 프로덕션 배포
 ```bash
@@ -345,3 +368,25 @@ cp .env.example .env
 # 프로덕션 서버 실행
 uvicorn app.main:app --host 0.0.0.0 --port 32375 --workers 4
 ```
+
+---
+
+## 📚 참고/연계 문서
+- [API 문서 및 데이터 흐름](API_DOCUMENTATION.md)
+- [동적 패턴 분석 가이드](DYNAMIC_PATTERNS_GUIDE.md)
+- [AI 앙상블 예측/통합](FRONTEND_INTEGRATION_COMPLETE.md), [INTEGRATION_SUCCESS.md]
+- [PyTorch 마이그레이션](PYTORCH_MIGRATION_COMPLETE.md)
+- [확률·비용 분석 UI](PROBABILITY_COST_UI_SUMMARY.md)
+- [UI/UX 업데이트](UPDATE_NOTES.md)
+- [보안 진단/권고](SECURITY_REPORT.md)
+- [통합 디버그 가이드](DEBUG_GUIDE.md)
+
+---
+
+## 🔒 보안 및 운영 주의사항
+- **API 인증/인가, 파일 업로드, 입력 검증, CORS, Docker, 로깅 등 보안 권고 반드시 적용**
+- **상용 배포 전 보안 점검 필수!** (보안 점수 3/10, 인증/인가 미구현 시 위험)
+
+---
+
+**최종 업데이트**: 2025-12-22

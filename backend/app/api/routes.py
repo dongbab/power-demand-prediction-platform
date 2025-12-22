@@ -137,7 +137,7 @@ async def get_station_detailed_analysis(station_id: str):
         station_name = safe_get("충전소명", f"충전소 {station_id}")
         station_location = safe_get("충전소주소", "위치 정보 없음")
         station_region = safe_get("권역", "미상")
-        station_city = safe_get("시군구", "미상")
+        station_city = safe_get("시도", "미상")
         charger_type = safe_get("충전기 구분", "급속")
         connector_types = df["커넥터명"].unique() if "커넥터명" in df.columns else ["DC콤보"]
         connector_type = "+".join([str(c) for c in connector_types if pd.notna(c)])
@@ -791,11 +791,15 @@ async def get_ensemble_prediction(
         except Exception as exc:
             logger.warning("Session prediction generation failed: %s", exc, exc_info=True)
         
+        # 현재 계약전력 추정 (미입력 시 임시 기본값 100kW 적용)
+        effective_current_contract = current_contract_kw if current_contract_kw is not None else 100.0
+
         # 계약 추천 생성 (RecommendationEngine 사용)
         recommendation_engine = RecommendationEngine()
         contract_recommendation = recommendation_engine.generate_recommendation(
             station_id=station_id,
             prediction_distribution=prediction_distribution,
+            current_contract_kw=effective_current_contract,
             historical_peak_series=daily_peak_series,
             session_power_series=session_power_series,
             session_prediction_series=session_prediction_series
@@ -937,7 +941,327 @@ async def clear_all_data():
         return {"success": False, "error": str(e)}
 
 
+@api_router.get("/stations/{station_id}/model-validation")
+async def validate_model_performance(
+    station_id: str,
+    train_end_date: str = "2024-09-30",
+    test_start_date: str = "2024-10-01",
+    test_end_date: str = "2024-10-31"
+):
+    """
+    모델 검증: 9월까지 학습하고 10월 예측 성능 평가
+
+    Args:
+        station_id: 충전소 ID
+        train_end_date: 학습 데이터 마지막 날짜 (기본: 2024-09-30)
+        test_start_date: 테스트 데이터 시작 날짜 (기본: 2024-10-01)
+        test_end_date: 테스트 데이터 종료 날짜 (기본: 2024-10-31)
+
+    Returns:
+        예측 vs 실제 비교, MAE, 상대 오차 등 검증 지표
+    """
+    try:
+        from ..prediction.ensemble_prediction_engine import EnsemblePredictionEngine
+        import numpy as np
+
+        # 데이터 로드
+        loader = ChargingDataLoader(station_id)
+        all_data = loader.load_historical_sessions(days=365)
+
+        if all_data.empty:
+            return {
+                "success": False,
+                "error": "충전소 데이터가 없습니다.",
+                "station_id": station_id
+            }
+
+        # 시간 컬럼 찾기
+        time_columns = [
+            "충전시작일시",
+            "충전완료일시",
+            "timestamp",
+            "측정일시",
+            "date",
+            "created_at"
+        ]
+        time_col = next((col for col in time_columns if col in all_data.columns), None)
+
+        if not time_col:
+            return {
+                "success": False,
+                "error": "시간 컬럼을 찾을 수 없습니다.",
+                "station_id": station_id
+            }
+
+        # 날짜 파싱
+        all_data[time_col] = pd.to_datetime(all_data[time_col], errors='coerce')
+        all_data = all_data.dropna(subset=[time_col])
+        all_data = all_data.sort_values(time_col)
+
+        # 데이터 가용성 확인 후 동적으로 학습/테스트 분할
+        min_date = all_data[time_col].min()
+        max_date = all_data[time_col].max()
+
+        # 사용자 지정 날짜로 데이터가 있는지 확인
+        train_end = pd.Timestamp(train_end_date)
+        test_start = pd.Timestamp(test_start_date)
+        test_end = pd.Timestamp(test_end_date)
+
+        # 지정된 날짜에 데이터가 없으면 동적으로 분할
+        if min_date > train_end or max_date < test_start:
+            # 전체 데이터를 80:20으로 분할
+            split_point = int(len(all_data) * 0.8)
+            train_data = all_data.iloc[:split_point].copy()
+            test_data = all_data.iloc[split_point:].copy()
+
+            # 실제 사용된 날짜로 업데이트
+            actual_train_end = train_data[time_col].max()
+            actual_test_start = test_data[time_col].min()
+            actual_test_end = test_data[time_col].max()
+
+            train_end_date = actual_train_end.strftime('%Y-%m-%d')
+            test_start_date = actual_test_start.strftime('%Y-%m-%d')
+            test_end_date = actual_test_end.strftime('%Y-%m-%d')
+        else:
+            # 지정된 날짜 사용
+            train_data = all_data[all_data[time_col] <= train_end].copy()
+            test_data = all_data[
+                (all_data[time_col] >= test_start) &
+                (all_data[time_col] <= test_end)
+            ].copy()
+
+            actual_train_end = train_end
+            actual_test_start = test_start
+            actual_test_end = test_end
+
+        if train_data.empty:
+            return {
+                "success": False,
+                "error": f"학습 데이터가 없습니다. 데이터 범위: {min_date.date()} ~ {max_date.date()}",
+                "station_id": station_id
+            }
+
+        if test_data.empty:
+            return {
+                "success": False,
+                "error": f"테스트 데이터가 없습니다. 데이터 범위: {min_date.date()} ~ {max_date.date()}",
+                "station_id": station_id
+            }
+
+        # 충전기 타입 판별
+        station_service = get_station_service()
+        charger_type = station_service._get_charger_type(train_data)
+
+        # 앙상블 예측 엔진으로 학습 데이터 기반 예측
+        ensemble_engine = EnsemblePredictionEngine()
+        prediction_result = ensemble_engine.predict_contract_power(
+            station_data=train_data,
+            station_id=station_id,
+            charger_type=charger_type
+        )
+
+        # 전력 컬럼 찾기
+        power_columns = ["순간최고전력", "순간 최고 전력", "max_power", "전력"]
+        power_col = next((col for col in power_columns if col in test_data.columns), None)
+
+        if not power_col:
+            return {
+                "success": False,
+                "error": "전력 컬럼을 찾을 수 없습니다.",
+                "station_id": station_id
+            }
+
+        # 학습 데이터(train) 일별 피크 계산
+        train_data['date'] = train_data[time_col].dt.date
+        train_data[power_col] = pd.to_numeric(train_data[power_col], errors='coerce')
+
+        daily_train = train_data.groupby('date')[power_col].max().reset_index()
+        daily_train.columns = ['date', 'actual_peak_kw']
+        daily_train = daily_train.dropna()
+
+        # 테스트 데이터(test) 일별 피크 계산
+        test_data['date'] = test_data[time_col].dt.date
+        test_data[power_col] = pd.to_numeric(test_data[power_col], errors='coerce')
+
+        daily_actual = test_data.groupby('date')[power_col].max().reset_index()
+        daily_actual.columns = ['date', 'actual_peak_kw']
+        daily_actual = daily_actual.dropna()
+
+        if daily_actual.empty:
+            return {
+                "success": False,
+                "error": "테스트 데이터 실제 피크가 없습니다.",
+                "station_id": station_id
+            }
+
+        # 예측 세션별 시계열 생성
+        try:
+            session_predictions = ensemble_engine.predict_session_series(
+                station_data=train_data,
+                station_id=station_id,
+                charger_type=charger_type
+            )
+        except Exception as exc:
+            logger.warning(f"Session prediction failed: {exc}")
+            session_predictions = []
+
+        # 예측값을 날짜별로 그룹화 (일별 최대값)
+        if session_predictions:
+            pred_df = pd.DataFrame(session_predictions)
+            pred_df['timestamp'] = pd.to_datetime(pred_df['timestamp'], errors='coerce')
+            pred_df = pred_df.dropna(subset=['timestamp'])
+            pred_df['date'] = pred_df['timestamp'].dt.date
+
+            # 10월 범위만 필터링
+            pred_df = pred_df[
+                (pred_df['timestamp'] >= test_start) &
+                (pred_df['timestamp'] <= test_end)
+            ]
+
+            if not pred_df.empty:
+                daily_pred = pred_df.groupby('date')['predicted_peak_kw'].max().reset_index()
+                daily_pred.columns = ['date', 'predicted_peak_kw']
+            else:
+                # 폴백: 앙상블 예측 평균값 사용
+                daily_pred = pd.DataFrame({
+                    'date': daily_actual['date'],
+                    'predicted_peak_kw': prediction_result.final_prediction_kw
+                })
+        else:
+            # 폴백: 앙상블 예측 평균값 사용
+            daily_pred = pd.DataFrame({
+                'date': daily_actual['date'],
+                'predicted_peak_kw': prediction_result.final_prediction_kw
+            })
+
+        # 예측-실제 병합
+        comparison = pd.merge(daily_actual, daily_pred, on='date', how='inner')
+
+        if comparison.empty:
+            return {
+                "success": False,
+                "error": "예측과 실제 데이터를 매칭할 수 없습니다.",
+                "station_id": station_id
+            }
+
+        # 검증 지표 계산
+        actual_values = comparison['actual_peak_kw'].values
+        predicted_values = comparison['predicted_peak_kw'].values
+
+        mae = np.mean(np.abs(actual_values - predicted_values))
+        rmse = np.sqrt(np.mean((actual_values - predicted_values) ** 2))
+
+        actual_mean = np.mean(actual_values)
+        relative_error = (mae / actual_mean * 100) if actual_mean > 0 else 0
+
+        # 일관성 평가 (상관계수)
+        try:
+            if len(actual_values) > 1:
+                corr_matrix = np.corrcoef(actual_values, predicted_values)
+                correlation = corr_matrix[0, 1]
+                # NaN 처리 (분산이 0일 때 발생)
+                if np.isnan(correlation) or np.isinf(correlation):
+                    correlation = 0.0
+            else:
+                correlation = 0.0
+        except Exception:
+            correlation = 0.0
+
+        # 시각화 데이터 준비 - 테스트 기간 (실제 vs 예측)
+        visualization_data = [
+            {
+                "date": str(row['date']),
+                "actual_peak_kw": round(float(row['actual_peak_kw']), 2),
+                "predicted_peak_kw": round(float(row['predicted_peak_kw']), 2)
+            }
+            for _, row in comparison.iterrows()
+        ]
+
+        # 학습 데이터 시각화 준비
+        train_visualization_data = [
+            {
+                "date": str(row['date']),
+                "actual_peak_kw": round(float(row['actual_peak_kw']), 2)
+            }
+            for _, row in daily_train.iterrows()
+        ]
+
+        # 일관성 레벨 판정
+        if correlation >= 0.8:
+            consistency = "양호"
+        elif correlation >= 0.6:
+            consistency = "보통"
+        else:
+            consistency = "개선 필요"
+
+        result = {
+            "success": True,
+            "station_id": station_id,
+            "timestamp": datetime.now().isoformat(),
+
+            # 검증 지표
+            "validation_metrics": {
+                "mae": round(mae, 2),
+                "rmse": round(rmse, 2),
+                "relative_error_percent": round(relative_error, 2),
+                "correlation": round(correlation, 3),
+                "consistency": consistency,
+                "comparison_days": len(comparison),
+                "actual_mean_kw": round(actual_mean, 2)
+            },
+
+            # 예측 정보
+            "prediction_info": {
+                "predicted_peak_kw": round(prediction_result.final_prediction_kw, 2),
+                "uncertainty_kw": round(prediction_result.uncertainty_kw, 2),
+                "confidence_level": prediction_result.confidence_level,
+                "model_weights": {
+                    "lstm": prediction_result.maturity.lstm_weight,
+                    "xgboost": prediction_result.maturity.xgboost_weight
+                }
+            },
+
+            # 시각화 데이터
+            "visualization_data": visualization_data,
+            "train_visualization_data": train_visualization_data,
+
+            # 학습/테스트 구간
+            "data_split": {
+                "train_end_date": train_end_date,
+                "test_start_date": test_start_date,
+                "test_end_date": test_end_date,
+                "train_sessions": len(train_data),
+                "test_sessions": len(test_data)
+            }
+        }
+
+        logger.info(f"Model validation completed for {station_id}: MAE={mae:.2f}kW, Correlation={correlation:.3f}")
+
+        # NaN/inf 안전 직렬화
+        def clean_for_json(obj):
+            import math
+            if isinstance(obj, float):
+                if math.isnan(obj) or math.isinf(obj):
+                    return None
+                return obj
+            elif isinstance(obj, dict):
+                return {k: clean_for_json(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [clean_for_json(x) for x in obj]
+            return obj
+
+        return clean_for_json(result)
+
+    except Exception as e:
+        logger.error(f"Error in model validation for {station_id}: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "station_id": station_id
+        }
+
+
 @api_router.get("/test")
 async def test_api():
-    
+
     return {"message": "API 정상 작동!", "timestamp": datetime.now().isoformat(), "main_loaded": main is not None}

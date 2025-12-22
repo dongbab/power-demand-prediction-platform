@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
     import { apiService } from '../../services/api';
     import type { EnsemblePredictionResponse } from '../../lib/types';
     import LoadingSpinner from '../LoadingSpinner.svelte';
@@ -14,19 +13,48 @@
     let showDetails = false;
     let summaryHighlights: string[] = [];
     let riskSummary = '';
+    const CONTRACT_MIN_KW = 30;
+    const CONTRACT_MAX_KW = 150;
+    const CONTRACT_STEP_KW = 10;
+    const DEFAULT_CONTRACT_KW = 100;
+
+    let contractInputKw = clampContractKw(currentContractKw ?? DEFAULT_CONTRACT_KW);
+    let previousPropContractKw = currentContractKw;
+
+    function clampContractKw(value: number | null | undefined): number {
+        if (!Number.isFinite(value ?? NaN)) {
+            return CONTRACT_MIN_KW;
+        }
+        const clamped = Math.min(CONTRACT_MAX_KW, Math.max(CONTRACT_MIN_KW, Number(value)));
+        const stepped = Math.round(clamped / CONTRACT_STEP_KW) * CONTRACT_STEP_KW;
+        return Math.min(CONTRACT_MAX_KW, Math.max(CONTRACT_MIN_KW, stepped));
+    }
+
+    function handleContractNumberBlur() {
+        contractInputKw = clampContractKw(contractInputKw);
+    }
+
+    $: if (currentContractKw !== previousPropContractKw) {
+        previousPropContractKw = currentContractKw;
+        if (currentContractKw !== undefined && currentContractKw !== null) {
+            contractInputKw = clampContractKw(currentContractKw);
+        }
+    }
 
     async function loadEnsemblePrediction() {
         loading = true;
         error = '';
-        
+        const requestContractKw = clampContractKw(contractInputKw ?? DEFAULT_CONTRACT_KW);
         try {
             const result = await apiService.getEnsemblePrediction(
                 stationId,
-                currentContractKw
+                requestContractKw
             );
             
             if (result.success) {
                 prediction = result;
+                const resolvedContract = result.contract_recommendation?.current_contract_kw ?? requestContractKw;
+                contractInputKw = clampContractKw(resolvedContract);
             } else {
                 error = result.error || '예측 실패';
             }
@@ -167,18 +195,45 @@
                 <span class="phase-badge">Phase 3</span>
             </div>
         </div>
-        <button
-            on:click={loadEnsemblePrediction}
-            disabled={loading}
-            class="refresh-btn"
-            class:loading
-        >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" class:spinning={loading}>
-                <path d="M23 4v6h-6M1 20v-6h6"/>
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-            </svg>
-            {loading ? '예측 중...' : '새로고침'}
-        </button>
+        <div class="header-actions">
+            <div class="contract-input-control">
+                <label for="contractKwInput">현재 계약전력</label>
+                <div class="number-input-row">
+                    <input
+                        id="contractKwInput"
+                        type="number"
+                        min={CONTRACT_MIN_KW}
+                        max={CONTRACT_MAX_KW}
+                        step={CONTRACT_STEP_KW}
+                        bind:value={contractInputKw}
+                        on:change={handleContractNumberBlur}
+                    />
+                    <span class="kw-suffix">kW</span>
+                </div>
+                <input
+                    class="contract-slider"
+                    type="range"
+                    min={CONTRACT_MIN_KW}
+                    max={CONTRACT_MAX_KW}
+                    step={CONTRACT_STEP_KW}
+                    bind:value={contractInputKw}
+                    aria-label="현재 계약전력 슬라이더"
+                />
+                <small>{CONTRACT_MIN_KW}~{CONTRACT_MAX_KW}kW · 10kW 단위로 조정</small>
+            </div>
+            <button
+                on:click={loadEnsemblePrediction}
+                disabled={loading}
+                class="refresh-btn"
+                class:loading
+            >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" class:spinning={loading}>
+                    <path d="M23 4v6h-6M1 20v-6h6"/>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+                {loading ? '예측 중...' : '예측 실행'}
+            </button>
+        </div>
     </div>
 
     {#if loading}
@@ -193,6 +248,33 @@
         <div class="error-state">
             <div class="error-icon">⚠️</div>
             <p class="error-message">{error}</p>
+        </div>
+    {:else if !prediction}
+        <!-- 초기 상태: 예측 시작 전 -->
+        <div class="welcome-state">
+            <div class="welcome-icon">🚀</div>
+            <h3 class="welcome-title">AI 계약 전력 예측을 시작하세요</h3>
+            <p class="welcome-description">
+                LSTM과 XGBoost 앙상블 모델이 충전소의 사용 패턴을 분석하여<br />
+                최적의 계약 전력과 예상 절감액을 계산해드립니다.
+            </p>
+            <div class="welcome-features">
+                <div class="feature-item">
+                    <span class="feature-icon">🧠</span>
+                    <span class="feature-text">시계열 패턴 분석</span>
+                </div>
+                <div class="feature-item">
+                    <span class="feature-icon">🌲</span>
+                    <span class="feature-text">다양한 변수 고려</span>
+                </div>
+                <div class="feature-item">
+                    <span class="feature-icon">💰</span>
+                    <span class="feature-text">비용 절감 분석</span>
+                </div>
+            </div>
+            <p class="welcome-cta">
+                위의 <strong>"예측 실행"</strong> 버튼을 눌러 분석을 시작하세요!
+            </p>
         </div>
     {:else if prediction}
         <!-- 메인 예측 결과 -->
@@ -397,7 +479,8 @@
         <!-- 10kW 단위 최적화 시각화 -->
         {#if prediction.contract_recommendation.optimization_details}
             <div class="optimization-section">
-                <ContractOptimizationChart 
+                <ContractOptimizationChart
+                    {stationId}
                     optimizationData={prediction.contract_recommendation.optimization_details}
                     predictionDistribution={prediction.contract_recommendation.optimization_details.prediction_distribution || []}
                     ensemblePrediction={prediction.ensemble_prediction}
@@ -456,6 +539,14 @@
         border-bottom: 1px solid var(--border-color);
     }
 
+    .header-actions {
+        display: flex;
+        align-items: flex-end;
+        gap: 16px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
     .title-section {
         display: flex;
         align-items: center;
@@ -478,6 +569,62 @@
         font-size: 1.5rem;
         font-weight: 700;
         color: var(--text-primary);
+    }
+
+    .contract-input-control {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 220px;
+    }
+
+    .contract-input-control label {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-secondary);
+    }
+
+    .number-input-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 4px 8px;
+    }
+
+    .number-input-row input {
+        width: 72px;
+        border: none;
+        background: transparent;
+        font-weight: 600;
+        font-size: 1rem;
+        color: var(--text-primary);
+        outline: none;
+        -moz-appearance: textfield;
+    }
+
+    .number-input-row input::-webkit-outer-spin-button,
+    .number-input-row input::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+    }
+
+    .kw-suffix {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        font-weight: 600;
+    }
+
+    .contract-slider {
+        width: 100%;
+        accent-color: var(--primary-color);
+    }
+
+    .contract-input-control small {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
     }
 
     .phase-badge {
@@ -582,6 +729,98 @@
         font-weight: 500;
         color: #dc2626;
         text-align: center;
+    }
+
+    /* 초기 상태 (환영 메시지) */
+    .welcome-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 60px 24px;
+        gap: 20px;
+        background: linear-gradient(135deg, rgba(99, 102, 241, 0.03), rgba(59, 130, 246, 0.03));
+        border: 2px dashed rgba(99, 102, 241, 0.2);
+        border-radius: 16px;
+        text-align: center;
+    }
+
+    .welcome-icon {
+        font-size: 4rem;
+        animation: bounce 2s ease-in-out infinite;
+    }
+
+    @keyframes bounce {
+        0%, 100% {
+            transform: translateY(0);
+        }
+        50% {
+            transform: translateY(-10px);
+        }
+    }
+
+    .welcome-title {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+
+    .welcome-description {
+        margin: 0;
+        font-size: 1rem;
+        color: var(--text-secondary);
+        line-height: 1.6;
+        max-width: 600px;
+    }
+
+    .welcome-features {
+        display: flex;
+        gap: 24px;
+        margin-top: 12px;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .feature-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        padding: 16px 20px;
+        background: rgba(99, 102, 241, 0.05);
+        border: 1px solid rgba(99, 102, 241, 0.15);
+        border-radius: 12px;
+        min-width: 140px;
+        transition: all 0.2s ease;
+    }
+
+    .feature-item:hover {
+        transform: translateY(-4px);
+        background: rgba(99, 102, 241, 0.08);
+        border-color: rgba(99, 102, 241, 0.25);
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
+    }
+
+    .feature-icon {
+        font-size: 2rem;
+    }
+
+    .feature-text {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .welcome-cta {
+        margin: 12px 0 0 0;
+        font-size: 1rem;
+        color: var(--text-secondary);
+    }
+
+    .welcome-cta strong {
+        color: var(--primary-color);
+        font-weight: 700;
     }
 
     /* 예측 카드 */
@@ -1114,6 +1353,16 @@
             flex-direction: column;
             align-items: flex-start;
             gap: 16px;
+        }
+
+        .header-actions {
+            width: 100%;
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .contract-input-control {
+            width: 100%;
         }
 
         .title-content h2 {
