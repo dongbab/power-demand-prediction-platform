@@ -17,6 +17,7 @@
     const CONTRACT_MAX_KW = 150;
     const CONTRACT_STEP_KW = 10;
     const DEFAULT_CONTRACT_KW = 100;
+    let lastUpdated: Date | null = null;
 
     let contractInputKw = clampContractKw(currentContractKw ?? DEFAULT_CONTRACT_KW);
     let previousPropContractKw = currentContractKw;
@@ -184,43 +185,27 @@
         riskSummary = prediction?.contract_recommendation.risk_assessment
             ? buildRiskSummary(prediction.contract_recommendation.risk_assessment)
             : '';
+
+    $: lastUpdated = prediction ? new Date(prediction.timestamp) : null;
 </script>
 
 <div class="ensemble-predictor">
-    <div class="ensemble-header">
-        <div class="title-section">
-            <div class="title-icon">🤖</div>
-            <div class="title-content">
-                <h2>AI 계약 전력 추천</h2>
-                <span class="phase-badge">Phase 3</span>
+    <div class="ensemble-hero">
+        <div class="hero-copy">
+            <p class="eyebrow">AI 계약 전력 추천</p>
+            <h2>순간 최고 전력 예측과 전력량 수요를 한눈에</h2>
+            <p class="hero-sub">
+                LSTM · XGBoost 앙상블이 학습한 패턴으로 계약전력, 리스크, 절감액을 실시간 계산합니다.
+            </p>
+            <div class="hero-meta">
+                <span class="meta-chip">충전소 {stationId}</span>
+                {#if prediction}
+                    <span class="meta-chip muted">업데이트 {lastUpdated?.toLocaleString('ko-KR')}</span>
+                    <span class="meta-chip muted">모델 {prediction.metadata.model_version}</span>
+                {/if}
             </div>
         </div>
-        <div class="header-actions">
-            <div class="contract-input-control">
-                <label for="contractKwInput">현재 계약전력</label>
-                <div class="number-input-row">
-                    <input
-                        id="contractKwInput"
-                        type="number"
-                        min={CONTRACT_MIN_KW}
-                        max={CONTRACT_MAX_KW}
-                        step={CONTRACT_STEP_KW}
-                        bind:value={contractInputKw}
-                        on:change={handleContractNumberBlur}
-                    />
-                    <span class="kw-suffix">kW</span>
-                </div>
-                <input
-                    class="contract-slider"
-                    type="range"
-                    min={CONTRACT_MIN_KW}
-                    max={CONTRACT_MAX_KW}
-                    step={CONTRACT_STEP_KW}
-                    bind:value={contractInputKw}
-                    aria-label="현재 계약전력 슬라이더"
-                />
-                <small>{CONTRACT_MIN_KW}~{CONTRACT_MAX_KW}kW · 10kW 단위로 조정</small>
-            </div>
+        <div class="hero-actions">
             <button
                 on:click={loadEnsemblePrediction}
                 disabled={loading}
@@ -277,97 +262,79 @@
             </p>
         </div>
     {:else if prediction}
-        <!-- 메인 예측 결과 -->
-        <div class="prediction-cards">
-            <!-- 최종 예측 -->
-            <div class="prediction-card final-prediction">
-                <div class="card-header">
-                    <div class="card-icon">🎯</div>
-                    <span class="card-label">앙상블 최종 예측</span>
+        <div class="metric-grid">
+            <div class="metric-card final">
+                <div class="metric-head">
+                    <span class="metric-label">앙상블 최종 예측</span>
+                    <span class="badge">피크</span>
                 </div>
-                <div class="card-value">
-                    {formatKw(prediction.ensemble_prediction.final_prediction_kw)}
-                    <span class="card-unit">kW</span>
+                <div class="metric-value">
+                    {formatKw(prediction.ensemble_prediction.final_prediction_kw)}<span class="unit">kW</span>
                 </div>
-                <div class="card-meta">
-                    <div class="meta-item">
-                        <span class="meta-label">불확실성</span>
-                        <span class="meta-value">±{formatKw(prediction.ensemble_prediction.uncertainty_kw)} kW</span>
-                    </div>
-                    <div class="meta-item">
-                        <span class="meta-label">신뢰도</span>
-                        <span class="meta-value confidence">
-                            {formatPercent(prediction.ensemble_prediction.confidence_level, 0)}
-                        </span>
-                    </div>
+                <div class="metric-sub">
+                    불확실성 ±{formatKw(prediction.ensemble_prediction.uncertainty_kw)}kW · 신뢰도 {formatPercent(prediction.ensemble_prediction.confidence_level, 0)}
                 </div>
             </div>
-
-            <!-- 권장 계약 -->
-            <div class="prediction-card recommended-contract">
-                <div class="card-header">
-                    <div class="card-icon">📋</div>
-                    <span class="card-label">권장 계약 전력</span>
+            <div class="metric-card contract">
+                <div class="metric-head">
+                    <span class="metric-label">권장 계약 전력</span>
+                    <span class="badge accent">추천</span>
                 </div>
-                <div class="card-value">
-                    {formatKw(prediction.contract_recommendation.recommended_contract_kw, 0)}
-                    <span class="card-unit">kW</span>
+                <div class="metric-value">
+                    {formatKw(prediction.contract_recommendation.recommended_contract_kw, 0)}<span class="unit">kW</span>
                 </div>
-                <div class="card-meta">
+                <div class="metric-sub">
                     {#if prediction.contract_recommendation.current_contract_kw}
-                        <div class="meta-item">
-                            <span class="meta-label">현재 계약</span>
-                            <span class="meta-value">{prediction.contract_recommendation.current_contract_kw} kW</span>
-                        </div>
+                        현재 {prediction.contract_recommendation.current_contract_kw}kW ·
                     {/if}
-                    <div class="urgency-badge urgency-{prediction.contract_recommendation.urgency_level}">
-                        {prediction.contract_recommendation.urgency_level.toUpperCase()}
-                    </div>
-                    <div class="urgency-description">
-                        {getUrgencyText(prediction.contract_recommendation.urgency_level)}
-                    </div>
+                    {getUrgencyText(prediction.contract_recommendation.urgency_level)}
                 </div>
             </div>
-
-            <!-- 연간 절감액 -->
+            <div class="metric-card risk">
+                <div class="metric-head">
+                    <span class="metric-label">과소/과다 리스크</span>
+                    <span class="badge muted">확률</span>
+                </div>
+                <div class="metric-value small">
+                    {riskSummary || '리스크 정보를 불러오는 중'}
+                </div>
+            </div>
             {#if prediction.contract_recommendation.annual_savings_won}
-                <div class="prediction-card savings-card">
-                    <div class="card-header">
-                        <div class="card-icon">💰</div>
-                        <span class="card-label">연간 예상 절감액</span>
+                <div class="metric-card savings">
+                    <div class="metric-head">
+                        <span class="metric-label">연간 예상 절감액</span>
+                        <span class="badge success">비용</span>
                     </div>
-                    <div class="card-value savings-value">
+                    <div class="metric-value">
                         {formatCurrency(prediction.contract_recommendation.annual_savings_won)}
                     </div>
-                    <div class="card-meta">
+                    <div class="metric-sub">
                         {#if prediction.contract_recommendation.savings_percentage}
-                            <div class="meta-item">
-                                <span class="meta-label">절감률</span>
-                                <span class="meta-value savings-percent">
-                                    {formatPercent(prediction.contract_recommendation.savings_percentage, 1)}
-                                </span>
-                            </div>
-                        {/if}
-                        {#if prediction.contract_recommendation.monthly_savings}
-                            <div class="meta-item">
-                                <span class="meta-label">월 절감액</span>
-                                <span class="meta-value">{formatCurrency(prediction.contract_recommendation.monthly_savings)}</span>
-                            </div>
+                            절감률 {formatPercent(prediction.contract_recommendation.savings_percentage, 1)}
+                        {:else}
+                            권장 계약 기준 절감 추정치
                         {/if}
                     </div>
                 </div>
             {/if}
         </div>
-        <div class="quick-summary">
-            <h3 class="section-title">한눈에 파악하기</h3>
-            <ul class="summary-list">
-                {#each summaryHighlights as item}
-                    <li>
-                        <span class="summary-bullet">•</span>
-                        <span>{item}</span>
-                    </li>
-                {/each}
-            </ul>
+        <div class="insight-panel">
+            <div>
+                <h3 class="section-title">요약 인사이트</h3>
+                <ul class="summary-list">
+                    {#each summaryHighlights as item}
+                        <li>
+                            <span class="summary-bullet">•</span>
+                            <span>{item}</span>
+                        </li>
+                    {/each}
+                </ul>
+            </div>
+            <div class="meta-chips">
+                <span class="meta-chip">LSTM {formatKw(prediction.ensemble_prediction.lstm.prediction_kw, 1)}kW</span>
+                <span class="meta-chip">XGBoost {formatKw(prediction.ensemble_prediction.xgboost.prediction_kw, 1)}kW</span>
+                <span class="meta-chip muted">샘플 {prediction.ensemble_prediction.maturity.session_count.toLocaleString()}건</span>
+            </div>
         </div>
         <!-- 모델 상세 정보 (토글) -->
         <div class="details-section">
@@ -530,52 +497,71 @@
         margin-bottom: clamp(24px, 4vw, 40px);
     }
 
-    /* 헤더 */
-    .ensemble-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding-bottom: 20px;
-        border-bottom: 1px solid var(--border-color);
+    .ensemble-hero {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 20px;
+        padding: 18px;
+        border: 1px solid var(--border-color);
+        border-radius: 16px;
+        background: linear-gradient(135deg, rgba(99,102,241,0.12), rgba(59,130,246,0.08));
     }
 
-    .header-actions {
+    .hero-copy h2 {
+        margin: 6px 0 8px;
+        font-size: 1.55rem;
+        color: var(--text-primary);
+    }
+
+    .hero-sub {
+        margin: 0;
+        color: var(--text-secondary);
+        line-height: 1.5;
+    }
+
+    .eyebrow {
+        margin: 0;
+        font-size: 0.9rem;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        color: var(--primary-color);
+    }
+
+    .hero-meta {
         display: flex;
-        align-items: flex-end;
-        gap: 16px;
+        gap: 8px;
         flex-wrap: wrap;
-        justify-content: flex-end;
+        margin-top: 10px;
     }
 
-    .title-section {
-        display: flex;
-        align-items: center;
-        gap: 16px;
+    .meta-chip {
+        padding: 6px 10px;
+        border-radius: 10px;
+        background: rgba(99, 102, 241, 0.12);
+        color: var(--text-primary);
+        font-size: 0.85rem;
+        border: 1px solid rgba(99, 102, 241, 0.25);
     }
 
-    .title-icon {
-        font-size: 2.5rem;
-        line-height: 1;
+    .meta-chip.muted {
+        background: rgba(148, 163, 184, 0.12);
+        border-color: rgba(148, 163, 184, 0.35);
+        color: var(--text-secondary);
     }
 
-    .title-content {
+    .hero-actions {
         display: flex;
         flex-direction: column;
-        gap: 4px;
-    }
-
-    .title-content h2 {
-        margin: 0;
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text-primary);
+        gap: 12px;
+        align-items: flex-end;
+        justify-content: center;
     }
 
     .contract-input-control {
         display: flex;
         flex-direction: column;
         gap: 6px;
-        min-width: 220px;
+        min-width: 240px;
     }
 
     .contract-input-control label {
@@ -627,31 +613,21 @@
         color: var(--text-secondary);
     }
 
-    .phase-badge {
-        display: inline-flex;
-        align-items: center;
-        padding: 4px 12px;
-        background: linear-gradient(135deg, #667eea, #764ba2);
-        color: white;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        letter-spacing: 0.5px;
-    }
-
     .refresh-btn {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 10px 20px;
+        padding: 12px 20px;
         background: var(--primary-color);
         color: white;
         border: none;
         border-radius: 10px;
-        font-size: 0.9rem;
-        font-weight: 600;
+        font-size: 0.95rem;
+        font-weight: 700;
         cursor: pointer;
         transition: all 0.2s ease;
+        min-width: 160px;
+        justify-content: center;
     }
 
     .refresh-btn:hover:not(:disabled) {
@@ -823,173 +799,87 @@
         font-weight: 700;
     }
 
-    /* 예측 카드 */
-    .prediction-cards {
+    /* 메트릭 카드 및 인사이트 */
+    .metric-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 14px;
     }
 
-    .prediction-card {
-        background: linear-gradient(135deg, var(--card-bg-from) 0%, var(--card-bg-to) 100%);
-        border: 1px solid var(--card-border);
-        border-radius: 14px;
-        padding: 20px;
+    .metric-card {
+        padding: 16px;
+        border-radius: 12px;
+        border: 1px solid var(--border-color);
+        background: var(--bg-secondary);
         box-shadow: 0 2px 8px var(--shadow);
-        transition: all 0.3s ease;
-    }
-
-    .prediction-card:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 8px 24px var(--shadow-hover);
-    }
-
-    .final-prediction {
-        --card-bg-from: rgba(59, 130, 246, 0.1);
-        --card-bg-to: rgba(99, 102, 241, 0.1);
-        --card-border: rgba(59, 130, 246, 0.3);
-    }
-
-    .recommended-contract {
-        --card-bg-from: rgba(16, 185, 129, 0.1);
-        --card-bg-to: rgba(5, 150, 105, 0.1);
-        --card-border: rgba(16, 185, 129, 0.3);
-    }
-
-    .savings-card {
-        --card-bg-from: rgba(168, 85, 247, 0.1);
-        --card-bg-to: rgba(139, 92, 246, 0.1);
-        --card-border: rgba(168, 85, 247, 0.3);
-    }
-
-    :global([data-theme="dark"]) .prediction-card {
-        --card-bg-from: rgba(59, 130, 246, 0.15);
-        --card-bg-to: rgba(99, 102, 241, 0.15);
-    }
-
-    :global([data-theme="dark"]) .final-prediction {
-        --card-bg-from: rgba(59, 130, 246, 0.15);
-        --card-bg-to: rgba(99, 102, 241, 0.15);
-    }
-
-    :global([data-theme="dark"]) .recommended-contract {
-        --card-bg-from: rgba(16, 185, 129, 0.15);
-        --card-bg-to: rgba(5, 150, 105, 0.15);
-    }
-
-    :global([data-theme="dark"]) .savings-card {
-        --card-bg-from: rgba(168, 85, 247, 0.15);
-        --card-bg-to: rgba(139, 92, 246, 0.15);
-    }
-
-    .card-header {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 16px;
-    }
-
-    .card-icon {
-        font-size: 1.5rem;
-    }
-
-    .card-label {
-        font-size: 0.9rem;
-        font-weight: 600;
-        color: var(--text-secondary);
-    }
-
-    .card-value {
-        font-size: 2.5rem;
-        font-weight: 800;
-        color: var(--text-primary);
-        line-height: 1;
-        margin-bottom: 12px;
-    }
-
-    .card-unit {
-        font-size: 1.2rem;
-        font-weight: 600;
-        color: var(--text-secondary);
-        margin-left: 4px;
-    }
-
-    .savings-value {
-        font-size: 1.8rem;
-    }
-
-    .card-meta {
         display: flex;
         flex-direction: column;
         gap: 8px;
     }
 
-    .urgency-description {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-        line-height: 1.4;
-    }
+    .metric-card.final { background: linear-gradient(135deg, rgba(59,130,246,0.1), rgba(99,102,241,0.08)); }
+    .metric-card.contract { background: linear-gradient(135deg, rgba(16,185,129,0.12), rgba(16,185,129,0.05)); }
+    .metric-card.savings { background: linear-gradient(135deg, rgba(59,130,246,0.08), rgba(16,185,129,0.08)); }
+    .metric-card.risk { background: linear-gradient(135deg, rgba(244,114,182,0.08), rgba(248,113,113,0.08)); }
 
-    .meta-item {
+    .metric-head {
         display: flex;
+        align-items: center;
         justify-content: space-between;
-        align-items: center;
-        font-size: 0.85rem;
+        gap: 8px;
     }
 
-    .meta-label {
-        color: var(--text-secondary);
-    }
-
-    .meta-value {
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-
-    .meta-value.confidence {
-        color: #3b82f6;
-    }
-
-    .meta-value.savings-percent {
-        color: #a855f7;
-    }
-
-    .urgency-badge {
-        display: inline-flex;
-        align-items: center;
-        padding: 6px 12px;
-        border-radius: 8px;
-        font-size: 0.75rem;
+    .badge {
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 0.78rem;
         font-weight: 700;
-        letter-spacing: 0.5px;
+        background: rgba(99, 102, 241, 0.15);
+        color: var(--primary-color);
     }
 
-    .urgency-high {
-        background: rgba(239, 68, 68, 0.15);
-        color: #dc2626;
-        border: 1px solid rgba(239, 68, 68, 0.3);
+    .badge.accent { background: rgba(16,185,129,0.15); color: #059669; }
+    .badge.success { background: rgba(34,197,94,0.18); color: #15803d; }
+    .badge.muted { background: rgba(148,163,184,0.2); color: var(--text-secondary); }
+
+    .metric-label {
+        font-weight: 700;
+        color: var(--text-primary);
+        font-size: 0.95rem;
     }
 
-    .urgency-medium {
-        background: rgba(245, 158, 11, 0.15);
-        color: #d97706;
-        border: 1px solid rgba(245, 158, 11, 0.3);
+    .metric-value {
+        font-size: 1.9rem;
+        font-weight: 800;
+        color: var(--text-primary);
+        display: flex;
+        align-items: baseline;
+        gap: 4px;
     }
 
-    .urgency-low {
-        background: rgba(34, 197, 94, 0.15);
-        color: #16a34a;
-        border: 1px solid rgba(34, 197, 94, 0.3);
+    .metric-value.small {
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.6;
     }
 
-    /* 성숙도 카드 */
-    .quick-summary {
-        background: linear-gradient(135deg, rgba(99, 102, 241, 0.05), rgba(59, 130, 246, 0.05));
-        border: 1px solid rgba(99, 102, 241, 0.2);
-        border-radius: 12px;
-        padding: 20px;
-        box-shadow: 0 2px 6px var(--shadow);
-        margin-top: 4px;
+    .unit { font-size: 1rem; color: var(--text-secondary); }
+
+    .metric-sub {
+        color: var(--text-secondary);
+        font-size: 0.95rem;
+    }
+
+    .insight-panel {
+        border: 1px solid var(--border-color);
+        border-radius: 14px;
+        padding: 16px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+        align-items: center;
+        background: var(--bg-secondary);
+        box-shadow: 0 2px 8px var(--shadow);
     }
 
     .section-title {
@@ -1001,11 +891,10 @@
 
     .summary-list {
         list-style: none;
-        margin: 14px 0 0 0;
+        margin: 8px 0 0 0;
         padding: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
+        display: grid;
+        gap: 6px;
     }
 
     .summary-list li {
@@ -1019,6 +908,13 @@
     .summary-bullet {
         color: var(--primary-color);
         font-weight: 700;
+    }
+
+    .meta-chips {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
     }
 
     /* 상세 정보 섹션 */
@@ -1349,31 +1245,25 @@
             padding: 16px;
         }
 
-        .ensemble-header {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 16px;
+        .ensemble-hero {
+            grid-template-columns: 1fr;
+            gap: 12px;
         }
 
-        .header-actions {
+        .hero-actions {
             width: 100%;
-            flex-direction: column;
-            align-items: stretch;
+            align-items: flex-start;
         }
 
         .contract-input-control {
             width: 100%;
         }
 
-        .title-content h2 {
+        .hero-copy h2 {
             font-size: 1.3rem;
         }
 
-        .card-value {
-            font-size: 2rem;
-        }
-
-        .prediction-cards {
+        .metric-grid {
             grid-template-columns: 1fr;
         }
 

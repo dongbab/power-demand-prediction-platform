@@ -51,6 +51,7 @@
     let isManualOvershoot = false;
     let defaultRecentRange: { min: number | null; max: number | null } = { min: null, max: null };
     const DEFAULT_SESSION_WINDOW_DAYS = 90;
+    let chartViewMode: 'session' | 'daily' = 'session'; // 차트 보기 모드
 
     // 모델 검증 데이터 (9월까지 학습 → 10월 예측)
     let validationData: any = null;
@@ -75,7 +76,6 @@
         overCostMonthly: number;
         shortageMonthly: number;
         totalLossMonthly: number;
-        evaluation: string;
     };
     type ShortfallDailyPoint = ContractShortfallDailyPoint;
     type ShortfallScenario = ContractShortfallSimulation;
@@ -345,51 +345,45 @@
     }
 
     function calcWasteCost(candidate: ContractCandidateDetail, referenceKw: number) {
-        if (typeof candidate.session_expected_waste_cost === 'number') {
-            return candidate.session_expected_waste_cost;
-        }
         const wasteProb = (candidate.session_waste_probability ?? candidate.waste_probability ?? 0) / 100;
-        if (wasteProb <= 0) {
-            return 0;
+        const wasteKw = candidate.session_average_waste_kw ?? Math.max(0, candidate.contract_kw - referenceKw);
+        const expectedWasteCost = candidate.session_expected_waste_cost;
+        if (typeof expectedWasteCost === 'number') {
+            return expectedWasteCost;
         }
-        const wasteKw = Math.max(0, candidate.contract_kw - referenceKw);
-        if (wasteKw <= 0) {
-            return 0;
-        }
+        if (wasteProb <= 0 || wasteKw <= 0) return 0;
         return wasteKw * BASIC_RATE_PER_KW * wasteProb;
     }
 
-    function calcShortageCost(candidate: ContractCandidateDetail, referenceKw: number) {
-        const overshootKw = candidate.session_average_overshoot_kw
+    function calcShortageCost(candidate: ContractCandidateDetail, referenceKw: number, shortfallScenario?: ShortfallScenario | null) {
+        // 예측 기반과 과거 데이터 중 더 큰 값 사용 (보수적 접근)
+        let predictionCost = 0;
+        let historicalCost = 0;
+
+        // 1. 예측 기반 비용 계산
+        if (shortfallScenario) {
+            const predProb = (shortfallScenario.overshoot_probability ?? 0) / 100;
+            const predOvershoot = shortfallScenario.expected_overshoot_kw ?? 0;
+            if (predProb > 0 && predOvershoot > 0) {
+                predictionCost = predOvershoot * BASIC_RATE_PER_KW * SHORTAGE_PENALTY_RATIO * predProb;
+            }
+        }
+
+        // 2. 과거 세션 데이터 기반 비용 계산
+        const histProb = (candidate.session_overage_probability ?? candidate.overage_probability ?? 0) / 100;
+        const histOvershoot = candidate.session_average_overshoot_kw
             ?? candidate.session_max_overshoot_kw
-            ?? Math.max(0, referenceKw - candidate.contract_kw);
-        if (!overshootKw) {
-            return 0;
+            ?? 0;
+        if (histProb > 0 && histOvershoot > 0) {
+            historicalCost = histOvershoot * BASIC_RATE_PER_KW * SHORTAGE_PENALTY_RATIO * histProb;
         }
-        const probability = (candidate.session_overage_probability ?? candidate.overage_probability ?? 0) / 100;
-        if (probability <= 0) {
-            return 0;
-        }
-        return overshootKw * BASIC_RATE_PER_KW * SHORTAGE_PENALTY_RATIO * probability;
+
+        // 더 큰 값 반환 (보수적 리스크 관리)
+        return Math.max(predictionCost, historicalCost);
     }
 
-    function describeScenarioImpact(scenario: ScenarioRow['scenario'], candidate: ContractCandidateDetail) {
-        const overProb = candidate.session_overage_probability ?? candidate.overage_probability ?? 0;
-        const wasteProb = candidate.session_waste_probability ?? candidate.waste_probability ?? 0;
-        if (scenario === 'optimal') {
-            return '추천';
-        }
-        if (scenario === 'under') {
-            if (overProb >= 60) return '위험';
-            if (overProb >= 30) return '주의';
-            return '조건부';
-        }
-        if (wasteProb >= 60) return '비효율';
-        if (wasteProb >= 30) return '여유';
-        return '안정';
-    }
 
-    function buildScenarioRows(candidates: ContractCandidateDetail[], optimalKw: number | null): ScenarioRow[] {
+    function buildScenarioRows(candidates: ContractCandidateDetail[], optimalKw: number | null, shortfallScenarios: ShortfallScenario[]): ScenarioRow[] {
         if (!Array.isArray(candidates) || candidates.length === 0) {
             return [];
         }
@@ -402,9 +396,20 @@
                     : 'under';
             const scenarioLabel = scenario === 'optimal' ? '최적안' : scenario === 'over' ? '과다' : '과소';
             const baseMonthly = candidate.contract_kw * BASIC_RATE_PER_KW;
-            const overCostMonthly = scenario === 'over' ? calcWasteCost(candidate, referenceKw) : 0;
-            const shortageMonthly = scenario === 'under' ? calcShortageCost(candidate, referenceKw) : 0;
+            const overCostMonthly = calcWasteCost(candidate, referenceKw);
+
+            // 해당 계약전력에 대한 shortfall 시나리오 찾기
+            const shortfallScenario = shortfallScenarios.find(s => s.contract_kw === candidate.contract_kw);
+            const shortageMonthly = calcShortageCost(candidate, referenceKw, shortfallScenario);
             const totalLossMonthly = overCostMonthly + shortageMonthly;
+
+            // 디버깅: 패널티 비용 계산 로그
+            const histProb = candidate.session_overage_probability ?? candidate.overage_probability ?? 0;
+            const histOvershoot = candidate.session_average_overshoot_kw ?? 0;
+            const predProb = shortfallScenario?.overshoot_probability ?? 0;
+            const predOvershoot = shortfallScenario?.expected_overshoot_kw ?? 0;
+            console.log(`[${candidate.contract_kw}kW] 과거데이터: ${histProb}% / ${histOvershoot}kW, 예측데이터: ${predProb}% / ${predOvershoot}kW → 패널티비용: ${shortageMonthly.toFixed(0)}원`);
+
             return {
                 scenario,
                 scenarioLabel,
@@ -412,8 +417,7 @@
                 baseMonthly,
                 overCostMonthly,
                 shortageMonthly,
-                totalLossMonthly,
-                evaluation: describeScenarioImpact(scenario, candidate)
+                totalLossMonthly
             } satisfies ScenarioRow;
         });
         const orderWeight: Record<ScenarioRow['scenario'], number> = { optimal: 0, under: 1, over: 2 };
@@ -814,13 +818,44 @@
             y: point.power_kw
         }));
 
-        const predictedSessions = sessionPredictionSeries.map(point => ({
-            x: new Date(point.date).getTime(),
-            y: point.power_kw
-        }));
+        // 세션 데이터를 일별 최고값으로 집계
+        const dailyPeakData = (() => {
+            const dailyMap = new Map<string, number>();
+            sessionSeries.forEach(point => {
+                const date = new Date(point.date);
+                const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+                const currentMax = dailyMap.get(dateKey) || 0;
+                dailyMap.set(dateKey, Math.max(currentMax, point.power_kw));
+            });
+
+            return Array.from(dailyMap.entries())
+                .map(([dateStr, maxKw]) => ({
+                    x: new Date(dateStr).getTime(),
+                    y: maxKw
+                }))
+                .sort((a, b) => a.x - b.x);
+        })();
 
         const manualKw = selectedContractKw ?? optimalCandidate?.contract_kw ?? null;
         const currentContractKw = optimizationData?.current_contract_kw ?? null;
+
+        const predictedSessionsOriginal = sessionPredictionSeries.map(point => ({
+            x: new Date(point.date).getTime(),
+            y: point.power_kw,
+            yOriginal: point.power_kw
+        }));
+
+        // 예측 세션 데이터 - 계약선에 의해 제한됨
+        const predictedSessions = predictedSessionsOriginal.map(point => {
+            let peak = point.yOriginal;
+            if (manualKw !== null && peak > manualKw) {
+                peak = manualKw;
+            }
+            return {
+                x: point.x,
+                y: peak
+            };
+        });
         
         // validation 데이터가 있으면 검증 차트에 계약선까지 포함해 렌더링
         if (validationData && validationData.visualization_data) {
@@ -845,17 +880,35 @@
             currentContractKw ?? 0
         );
         const ySuggestedMax = referenceMax > 0 ? referenceMax * 1.08 : undefined;
+
+        // 초과 영역: 모드에 따라 다른 데이터 사용
         const predictedOvershootFill = manualKw !== null
-            ? predictedSessions.map(point => ({
+            ? (chartViewMode === 'daily' ? dailyPeakData : chronologicalSessions).map(point => ({
                 x: point.x,
                 y: point.y > manualKw ? point.y : null
             }))
             : [];
 
+        // 디버깅: 실제 데이터 최대값 확인
+        if (manualKw !== null && chronologicalSessions.length > 0) {
+            const maxSession = Math.max(...chronologicalSessions.map(p => p.y));
+            const maxDaily = dailyPeakData.length > 0 ? Math.max(...dailyPeakData.map(p => p.y)) : 0;
+            const overshootCount = chronologicalSessions.filter(p => p.y > manualKw).length;
+            const scenario = manualKw > (optimalCandidate?.contract_kw || 0) ? '과다' : manualKw < (optimalCandidate?.contract_kw || 0) ? '과소' : '최적';
+            console.log(`[${manualKw}kW ${scenario}] 세션 최대: ${maxSession.toFixed(1)}kW, 일별 최대: ${maxDaily.toFixed(1)}kW, 초과 세션: ${overshootCount}개`);
+        }
+
         const projectionDataset = shortfallDailyProjection.map(point => ({
             x: new Date(point.date).getTime(),
             y: point.simulated_peak_kw
         }));
+
+        // 디버깅: 예측 피크 데이터 확인
+        if (manualKw !== null && projectionDataset.length > 0) {
+            const maxPeak = Math.max(...projectionDataset.map(p => p.y));
+            const avgPeak = projectionDataset.reduce((sum, p) => sum + p.y, 0) / projectionDataset.length;
+            console.log(`[차트] ${manualKw}kW 계약 선택 → 예측 피크 최대: ${maxPeak.toFixed(1)}kW, 평균: ${avgPeak.toFixed(1)}kW`);
+        }
         const smoothedProjectionLine = smoothChronologicalSeries(
             shortfallDailyProjection.map(point => ({ date: point.date, value: point.simulated_peak_kw })),
             6
@@ -868,6 +921,12 @@
                 y: point.simulated_peak_kw > manualKw ? point.simulated_peak_kw : null
             }))
             : [];
+
+        // 디버깅: 초과 영역 데이터 확인
+        if (hasSimulation) {
+            const overshootCount = overshootFillDataset.filter(p => p.y !== null).length;
+            console.log(`[차트] ${manualKw}kW 계약, 총 ${shortfallDailyProjection.length}일 중 ${overshootCount}일 초과 예상, isManualOvershoot=${isManualOvershoot}`);
+        }
 
         // 과다 계약 시 여유 영역 표시
         const wasteAreaDataset = hasSimulation && isManualOvershoot
@@ -929,7 +988,8 @@
                 datasets: (() => {
                     const baseDatasets: any[] = [];
 
-                    if (sessionSeries.length > 0) {
+                    // 세션별 모드
+                    if (chartViewMode === 'session' && sessionSeries.length > 0) {
                         baseDatasets.push({
                             label: '실제 세션 궤적',
                             data: chronologicalSessions,
@@ -959,19 +1019,77 @@
                         });
                     }
 
-                    if (sessionPredictionSeries.length > 0) {
-                        if (manualKw !== null) {
+                    // 1일당 순간최고전력 모드
+                    if (chartViewMode === 'daily' && dailyPeakData.length > 0) {
+                        // 초과 영역 (일별)
+                        if (manualKw !== null && predictedOvershootFill.some(p => p.y !== null)) {
                             baseDatasets.push({
-                                label: '예측 초과 영역',
+                                label: '계약선 초과 영역 (일별)',
                                 data: predictedOvershootFill,
-                                borderColor: 'rgba(139, 92, 246, 0)',
-                                backgroundColor: 'rgba(139, 92, 246, 0.15)',
+                                borderColor: 'rgba(248, 113, 113, 0)',
+                                backgroundColor: 'rgba(248, 113, 113, 0.25)',
                                 borderWidth: 0,
                                 pointRadius: 0,
                                 pointHoverRadius: 0,
                                 tension: 0.3,
                                 fill: { target: { value: manualKw } },
-                                order: 1,
+                                order: 0,
+                                parsing: false,
+                                spanGaps: true
+                            });
+                        }
+
+                        baseDatasets.push({
+                            label: '일별 최고전력 (실제)',
+                            data: dailyPeakData,
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            borderWidth: 2.5,
+                            pointRadius: 3,
+                            pointHoverRadius: 5,
+                            tension: 0.3,
+                            fill: false,
+                            order: 2,
+                            parsing: false,
+                            spanGaps: false
+                        });
+
+                        // 일별 최고전력 포인트
+                        baseDatasets.push({
+                            label: '일별 피크',
+                            data: dailyPeakData,
+                            borderColor: 'rgba(16, 185, 129, 0.6)',
+                            backgroundColor: (context: any) => {
+                                const y = context.raw?.y;
+                                if (manualKw !== null && Number.isFinite(y) && y > manualKw) {
+                                    return 'rgba(248, 113, 113, 0.9)'; // 초과
+                                }
+                                return 'rgba(16, 185, 129, 0.9)'; // 정상
+                            },
+                            pointRadius: 4,
+                            pointHoverRadius: 6,
+                            showLine: false,
+                            borderWidth: 0,
+                            order: 1,
+                            parsing: false,
+                            spanGaps: false
+                        });
+                    }
+
+                    // 예측 세션 데이터 (세션별 모드에서만)
+                    if (chartViewMode === 'session' && sessionPredictionSeries.length > 0) {
+                        if (manualKw !== null && predictedOvershootFill.some(p => p.y !== null)) {
+                            baseDatasets.push({
+                                label: '계약선 초과 영역 (세션)',
+                                data: predictedOvershootFill,
+                                borderColor: 'rgba(248, 113, 113, 0)',
+                                backgroundColor: 'rgba(248, 113, 113, 0.2)',
+                                borderWidth: 0,
+                                pointRadius: 0,
+                                pointHoverRadius: 0,
+                                tension: 0.3,
+                                fill: { target: { value: manualKw } },
+                                order: 0,
                                 parsing: false,
                                 spanGaps: true
                             });
@@ -990,17 +1108,12 @@
                             parsing: false,
                             spanGaps: false
                         });
+                        // 계약선 내 예측 세션 피크
                         baseDatasets.push({
                             label: '예측 세션 피크',
                             data: predictedSessions,
-                            borderColor: 'rgba(139, 92, 246, 0.45)',
-                            backgroundColor: (context: any) => {
-                                const y = context.raw?.y;
-                                if (manualKw !== null && Number.isFinite(y) && y > manualKw) {
-                                    return 'rgba(248, 113, 113, 0.9)'; // overshoot
-                                }
-                                return 'rgba(59, 130, 246, 0.9)'; // within contract
-                            },
+                            borderColor: 'rgba(59, 130, 246, 0.45)',
+                            backgroundColor: 'rgba(59, 130, 246, 0.9)',
                             pointRadius: 3,
                             pointHoverRadius: 4,
                             showLine: false,
@@ -1009,6 +1122,29 @@
                             parsing: false,
                             spanGaps: false
                         });
+
+                        // 계약선 초과 예측 세션 피크 (원본 데이터)
+                        if (manualKw !== null) {
+                            const overshootPoints = predictedSessionsOriginal
+                                .filter(p => p.yOriginal > manualKw)
+                                .map(p => ({ x: p.x, y: p.yOriginal }));
+
+                            if (overshootPoints.length > 0) {
+                                baseDatasets.push({
+                                    label: '예측 초과 피크',
+                                    data: overshootPoints,
+                                    borderColor: 'rgba(248, 113, 113, 0.45)',
+                                    backgroundColor: 'rgba(248, 113, 113, 0.9)',
+                                    pointRadius: 3,
+                                    pointHoverRadius: 4,
+                                    showLine: false,
+                                    borderWidth: 0,
+                                    order: 1,
+                                    parsing: false,
+                                    spanGaps: false
+                                });
+                            }
+                        }
                     }
 
                     if (hasSimulation) {
@@ -1194,6 +1330,9 @@
         }
 
         console.log('[ContractOptimizationChart] Creating validation chart with data:', validationData.data_split);
+        if (manualKw !== null) {
+            console.log(`[검증차트] ${manualKw}kW 계약 선택, 예상초과=${activeShortfallScenario?.expected_overshoot_kw || 0}kW`);
+        }
 
         const textColor = isDarkMode ? '#e2e8f0' : '#1f2937';
         const gridColor = isDarkMode ? 'rgba(148, 163, 184, 0.2)' : 'rgba(0, 0, 0, 0.08)';
@@ -1210,15 +1349,38 @@
             y: item.actual_peak_kw
         }));
 
-        // 테스트 기간 예측 데이터
-        const testPredictedData = validationData.visualization_data.map((item: any) => ({
+        // 테스트 기간 예측 데이터 - 계약선에 의해 제한됨
+        const testPredictedOriginal = validationData.visualization_data.map((item: any) => ({
             x: new Date(item.date).getTime(),
-            y: item.predicted_peak_kw
+            y: item.predicted_peak_kw,
+            yOriginal: item.predicted_peak_kw
         }));
+
+        const testPredictedData = testPredictedOriginal.map((item: any) => {
+            let peak = item.yOriginal;
+
+            // 계약선이 있으면 예측 피크를 계약선 이하로 제한
+            if (manualKw !== null && peak > manualKw) {
+                peak = manualKw;
+            }
+
+            return {
+                x: item.x,
+                y: peak
+            };
+        });
 
         // 학습/테스트 구간 날짜
         const trainEndDate = validationData.data_split?.train_end_date || '2024-09-30';
         const testStartDate = validationData.data_split?.test_start_date || '2024-10-01';
+
+        // 초과 영역 데이터 (실제 데이터가 계약선을 넘는 부분만)
+        const overshootAreaData = manualKw !== null
+            ? testActualData.map(p => ({
+                x: p.x,
+                y: p.y > manualKw ? p.y : null
+            }))
+            : [];
 
         const datasets: any[] = [
             {
@@ -1260,6 +1422,23 @@
                 borderDash: [5, 5]
             }
         ];
+
+        // 초과 영역 음영 추가
+        if (manualKw !== null && overshootAreaData.some(p => p.y !== null)) {
+            datasets.push({
+                label: '계약전력 초과 영역',
+                data: overshootAreaData,
+                borderColor: 'rgba(248, 113, 113, 0)',
+                backgroundColor: 'rgba(248, 113, 113, 0.25)',
+                pointRadius: 0,
+                pointHoverRadius: 0,
+                tension: 0.3,
+                borderWidth: 0,
+                fill: { target: { value: manualKw } },
+                order: 0,
+                spanGaps: true
+            });
+        }
 
         const splitLineDate = new Date(testStartDate).getTime();
         const annotations: Record<string, any> = {
@@ -1574,7 +1753,7 @@
             .map(normalizeCandidate)
             .filter((candidate): candidate is ContractCandidateDetail => candidate !== null)
         : [];
-    $: scenarioRows = buildScenarioRows(allCandidates, optimalCandidate?.contract_kw ?? null);
+    $: scenarioRows = buildScenarioRows(allCandidates, optimalCandidate?.contract_kw ?? null, shortfallScenarios);
     $: if (allCandidates.length > 0) {
         const defaultKw = optimalCandidate?.contract_kw ?? allCandidates[0].contract_kw;
         const hasSelection = selectedContractKw !== null && allCandidates.some(candidate => candidate.contract_kw === selectedContractKw);
@@ -1613,12 +1792,41 @@
         shortfallScenarios,
         targetContractKw
     );
-    $: scenarioPredictedPeakAvg = targetContractKw !== null && activeShortfallScenario
-        ? Number((targetContractKw + (activeShortfallScenario.expected_overshoot_kw ?? 0)).toFixed(2))
-        : null;
-    $: scenarioPredictedPeakP90 = targetContractKw !== null && activeShortfallScenario
-        ? Number((targetContractKw + (activeShortfallScenario.p90_overshoot_kw ?? 0)).toFixed(2))
-        : null;
+    $: {
+        console.log('[ContractOptimizationChart] targetContractKw:', targetContractKw);
+        console.log('[ContractOptimizationChart] activeShortfallScenario:', activeShortfallScenario);
+        console.log('[ContractOptimizationChart] shortfallScenarios:', shortfallScenarios);
+    }
+    $: scenarioPredictedPeakAvg = (() => {
+        if (targetContractKw !== null && activeShortfallScenario) {
+            const result = Number((targetContractKw + (activeShortfallScenario.expected_overshoot_kw ?? 0)).toFixed(2));
+            console.log('[ContractOptimizationChart] scenarioPredictedPeakAvg (from shortfall):', result, '=', targetContractKw, '+', activeShortfallScenario.expected_overshoot_kw);
+            return result;
+        }
+        if (targetContractKw !== null && predictionDistribution.length) {
+            const p75 = percentile(predictionDistribution, 75);
+            const result = Number(Math.max(targetContractKw, p75).toFixed(2));
+            console.log('[ContractOptimizationChart] scenarioPredictedPeakAvg (from distribution):', result, '= max(', targetContractKw, ',', p75, ')');
+            return result;
+        }
+        console.log('[ContractOptimizationChart] scenarioPredictedPeakAvg: null');
+        return null;
+    })();
+    $: scenarioPredictedPeakP90 = (() => {
+        if (targetContractKw !== null && activeShortfallScenario) {
+            const result = Number((targetContractKw + (activeShortfallScenario.p90_overshoot_kw ?? 0)).toFixed(2));
+            console.log('[ContractOptimizationChart] scenarioPredictedPeakP90 (from shortfall):', result, '=', targetContractKw, '+', activeShortfallScenario.p90_overshoot_kw);
+            return result;
+        }
+        if (targetContractKw !== null && predictionDistribution.length) {
+            const p90Local = percentile(predictionDistribution, 90);
+            const result = Number(Math.max(targetContractKw, p90Local).toFixed(2));
+            console.log('[ContractOptimizationChart] scenarioPredictedPeakP90 (from distribution):', result, '= max(', targetContractKw, ',', p90Local, ')');
+            return result;
+        }
+        console.log('[ContractOptimizationChart] scenarioPredictedPeakP90: null');
+        return null;
+    })();
     $: scenarioP50 = predictionDistribution.length
         ? Number(percentile(predictionDistribution, 50).toFixed(2))
         : null;
@@ -1653,7 +1861,13 @@
     <div class="chart-sections">
         <div class="section time-series">
             <div class="section-header">
-                <h4>세션 기반 순간전력 추이</h4>
+                <div class="header-left">
+                    <h4>순간전력 추이</h4>
+                    <select class="view-mode-select" bind:value={chartViewMode} on:change={() => createTimeSeriesChart()}>
+                        <option value="session">세션별</option>
+                        <option value="daily">1일당 순간최고전력</option>
+                    </select>
+                </div>
                 {#if hasSessionTimeline}
                     <div class="chart-actions">
                         <button
@@ -1911,15 +2125,14 @@
                             ></th
                         >
                         <th>과다계약 비용</th>
-                        <th>과소계약 손실</th>
-                        <th>총 손실</th>
-                        <th>경제적 평가</th>
+                        <th>과소 계약 패널티 비용</th>
+                        <th>손실</th>
                     </tr>
                 </thead>
                 <tbody>
                     {#if scenarioRows.length === 0}
                         <tr>
-                            <td colspan="7" class="empty-row"
+                            <td colspan="6" class="empty-row"
                                 >최적화 후보 데이터를 불러올 수 없습니다.</td
                             >
                         </tr>
@@ -1940,21 +2153,23 @@
                                     >
                                 </td>
                                 <td>{row.contractKw}kW</td>
-                                <td>{formatManwon(row.baseMonthly)} 만원</td>
+                                <td>약 {formatManwon(row.baseMonthly)} 만원</td>
                                 <td
-                                    >{row.scenario === "over"
-                                        ? `${formatManwon(row.overCostMonthly)} 만원`
+                                    >{row.overCostMonthly > 0
+                                        ? `약 ${formatManwon(row.overCostMonthly)} 만원`
                                         : "-"}</td
                                 >
                                 <td
-                                    >{row.scenario === "under"
-                                        ? `${formatManwon(row.shortageMonthly)} 만원`
-                                        : "-"}</td
+                                    >{(() => {
+                                        console.log(`[UI] ${row.contractKw}kW shortageMonthly=${row.shortageMonthly}`);
+                                        return row.shortageMonthly > 0
+                                            ? `약 ${formatManwon(row.shortageMonthly)} 만원`
+                                            : "-";
+                                    })()}</td
                                 >
                                 <td
-                                    >{formatManwon(row.totalLossMonthly)} 만원</td
+                                    >{row.totalLossMonthly > 0 ? `약 ${formatManwon(row.totalLossMonthly)} 만원` : "-"}</td
                                 >
-                                <td class="evaluation">{row.evaluation}</td>
                             </tr>
                         {/each}
                     {/if}
@@ -2102,6 +2317,35 @@
         align-items: center;
         gap: 12px;
         margin-bottom: 8px;
+    }
+
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .view-mode-select {
+        padding: 6px 12px;
+        border: 1px solid var(--table-border);
+        border-radius: 6px;
+        background: var(--section-bg);
+        color: var(--text-primary);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .view-mode-select:hover {
+        border-color: var(--accent-primary);
+        background: var(--badge-bg);
+    }
+
+    .view-mode-select:focus {
+        outline: none;
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
     }
 
     .time-series {
@@ -2414,11 +2658,6 @@
     .scenario-table tbody tr.optimal .scenario-tag {
         background: var(--table-total-bg);
         color: var(--table-total-text);
-    }
-
-    .scenario-table td.evaluation {
-        font-weight: 700;
-        color: var(--text-primary);
     }
 
     .scenario-table .empty-row {
