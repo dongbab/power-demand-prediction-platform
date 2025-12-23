@@ -1,9 +1,7 @@
 
-# ⚡ 충전소 전력 수요 예측 플랫폼 (Phase 3)
+# ⚡ 충전소 전력 수요 예측 플랫폼
 
-EV 충전소의 전력 수요를 예측하고, 최적의 계약전력과 비용 절감 방안을 추천하는 AI 기반 통합 플랫폼입니다.
-프론트엔드-백엔드 완전 통합, PyTorch 기반 LSTM/XGBoost 앙상블, 동적 패턴 분석, 확률·비용 시뮬레이션, 보안 진단까지 모두 지원합니다.
-
+EV 충전소의 전력 수요를 예측하고, 최적의 계약전력과 비용 절감 방안을 추천하는 AI 기반 통합 플랫폼
 
 ## 🚀 빠른 시작
 
@@ -18,7 +16,6 @@ python debug_consolidated.py --station BNS0061 --test all
 
 ### 🔧 2단계: 환경 설정
 ```bash
-
 # 1. 환경변수 파일 복사 (선택사항)
 cp .env .env.local  # 로컬 개발용
 cp .env.production .env.prod  # 프로덕션용
@@ -101,7 +98,7 @@ npm run dev
 - 반응형 웹 디자인
 
 
-## 🏗️ 시스템 아키텍처 (최신)
+## 🏗️ 시스템 아키텍처
 
 
 ```
@@ -139,7 +136,7 @@ npm run dev
 - **Docker/Docker Compose**: 멀티 컨테이너 관리
 
 
-## 📁 프로젝트 구조 (주요)
+## 📁 프로젝트 구조
 
 ```
 power-demand-prediction-platform/
@@ -240,7 +237,6 @@ docker-compose up -d
 **증상**: `ModuleNotFoundError: No module named 'fastapi'`
 **해결책**:
 ```bash
-
 # 통합 진단 도구 실행
 python debug_consolidated.py --station BNS0061 --test all
 
@@ -368,25 +364,3 @@ cp .env.example .env
 # 프로덕션 서버 실행
 uvicorn app.main:app --host 0.0.0.0 --port 32375 --workers 4
 ```
-
----
-
-## 📚 참고/연계 문서
-- [API 문서 및 데이터 흐름](API_DOCUMENTATION.md)
-- [동적 패턴 분석 가이드](DYNAMIC_PATTERNS_GUIDE.md)
-- [AI 앙상블 예측/통합](FRONTEND_INTEGRATION_COMPLETE.md), [INTEGRATION_SUCCESS.md]
-- [PyTorch 마이그레이션](PYTORCH_MIGRATION_COMPLETE.md)
-- [확률·비용 분석 UI](PROBABILITY_COST_UI_SUMMARY.md)
-- [UI/UX 업데이트](UPDATE_NOTES.md)
-- [보안 진단/권고](SECURITY_REPORT.md)
-- [통합 디버그 가이드](DEBUG_GUIDE.md)
-
----
-
-## 🔒 보안 및 운영 주의사항
-- **API 인증/인가, 파일 업로드, 입력 검증, CORS, Docker, 로깅 등 보안 권고 반드시 적용**
-- **상용 배포 전 보안 점검 필수!** (보안 점수 3/10, 인증/인가 미구현 시 위험)
-
----
-
-**최종 업데이트**: 2025-12-22

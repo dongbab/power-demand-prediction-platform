@@ -43,6 +43,10 @@
     let overfitSignal: OverfitSignal = { isRisk: false, mae: null, relativeError: null, coverageDays: 0 };
     let selectedContractKw: number | null = null;
     let targetContractKw: number | null = null;
+    let scenarioPredictedPeakAvg: number | null = null;
+    let scenarioPredictedPeakP90: number | null = null;
+    let scenarioOverageProbability: number | null = null;
+    let scenarioP50: number | null = null;
     let isManualUndershoot = false;
     let isManualOvershoot = false;
     let defaultRecentRange: { min: number | null; max: number | null } = { min: null, max: null };
@@ -802,16 +806,6 @@
             timeSeriesChartInstance = null;
         }
 
-        // validation 데이터가 있으면 그것을 우선 사용
-        if (validationData && validationData.visualization_data) {
-            createValidationChart();
-            return;
-        }
-
-        if (!hasSessionTimeline) {
-            return;
-        }
-
         const textColor = isDarkMode ? '#e2e8f0' : '#1f2937';
         const gridColor = isDarkMode ? 'rgba(148, 163, 184, 0.2)' : 'rgba(0, 0, 0, 0.08)';
 
@@ -827,6 +821,16 @@
 
         const manualKw = selectedContractKw ?? optimalCandidate?.contract_kw ?? null;
         const currentContractKw = optimizationData?.current_contract_kw ?? null;
+        
+        // validation 데이터가 있으면 검증 차트에 계약선까지 포함해 렌더링
+        if (validationData && validationData.visualization_data) {
+            createValidationChart(manualKw, currentContractKw);
+            return;
+        }
+
+        if (!hasSessionTimeline) {
+            return;
+        }
 
         const observedMax = Math.max(
             ...[
@@ -940,6 +944,19 @@
                             parsing: false,
                             spanGaps: false
                         });
+                        baseDatasets.push({
+                            label: '개별 세션 피크',
+                            data: chronologicalSessions,
+                            borderColor: 'rgba(14, 165, 233, 0.6)',
+                            backgroundColor: 'rgba(14, 165, 233, 0.6)',
+                            borderWidth: 0,
+                            pointRadius: 3,
+                            pointHoverRadius: 4,
+                            showLine: false,
+                            order: 4,
+                            parsing: false,
+                            spanGaps: false
+                        });
                     }
 
                     if (sessionPredictionSeries.length > 0) {
@@ -970,6 +987,25 @@
                             tension: 0.3,
                             fill: false,
                             order: manualKw !== null ? 2 : 1,
+                            parsing: false,
+                            spanGaps: false
+                        });
+                        baseDatasets.push({
+                            label: '예측 세션 피크',
+                            data: predictedSessions,
+                            borderColor: 'rgba(139, 92, 246, 0.45)',
+                            backgroundColor: (context: any) => {
+                                const y = context.raw?.y;
+                                if (manualKw !== null && Number.isFinite(y) && y > manualKw) {
+                                    return 'rgba(248, 113, 113, 0.9)'; // overshoot
+                                }
+                                return 'rgba(59, 130, 246, 0.9)'; // within contract
+                            },
+                            pointRadius: 3,
+                            pointHoverRadius: 4,
+                            showLine: false,
+                            borderWidth: 0,
+                            order: manualKw !== null ? 3 : 2,
                             parsing: false,
                             spanGaps: false
                         });
@@ -1147,7 +1183,7 @@
         });
     }
 
-    function createValidationChart() {
+    function createValidationChart(manualKw: number | null, currentContractKw: number | null) {
         if (!timeSeriesCanvas || !ChartCtor || !validationData) {
             console.log('[ContractOptimizationChart] Skipping createValidationChart - missing:', {
                 canvas: !!timeSeriesCanvas,
@@ -1245,6 +1281,53 @@
             }
         };
 
+        if (manualKw !== null && manualKw !== undefined) {
+            annotations.contractLine = {
+                type: 'line',
+                yMin: manualKw,
+                yMax: manualKw,
+                borderColor: '#f97316',
+                borderWidth: 2,
+                borderDash: [6, 4],
+                label: {
+                    content: `선택 계약선: ${manualKw}kW`,
+                    display: true,
+                    position: 'start',
+                    backgroundColor: '#f97316',
+                    color: '#fff',
+                    font: { size: 10, weight: 'bold' }
+                }
+            };
+        }
+
+        if (currentContractKw !== null && currentContractKw !== undefined) {
+            annotations.currentContractLine = {
+                type: 'line',
+                yMin: currentContractKw,
+                yMax: currentContractKw,
+                borderColor: '#22c55e',
+                borderWidth: 1.5,
+                borderDash: [4, 4],
+                label: {
+                    content: `현재 계약선: ${currentContractKw}kW`,
+                    display: true,
+                    position: 'end',
+                    backgroundColor: '#22c55e',
+                    color: '#0f172a',
+                    font: { size: 10, weight: 'bold' }
+                }
+            };
+        }
+
+        const yValues = [
+            ...trainData.map((p: any) => p.y),
+            ...testActualData.map((p: any) => p.y),
+            ...testPredictedData.map((p: any) => p.y),
+            manualKw ?? null,
+            currentContractKw ?? null
+        ].filter((v) => Number.isFinite(v)) as number[];
+        const ySuggestedMax = yValues.length ? Math.max(...yValues) * 1.08 : undefined;
+
         timeSeriesChartInstance = new ChartCtor(timeSeriesCanvas, {
             type: 'line',
             data: { datasets },
@@ -1281,6 +1364,7 @@
                         }
                     },
                     y: {
+                        suggestedMax: ySuggestedMax,
                         title: {
                             display: true,
                             text: '전력 (kW)',
@@ -1529,6 +1613,24 @@
         shortfallScenarios,
         targetContractKw
     );
+    $: scenarioPredictedPeakAvg = targetContractKw !== null && activeShortfallScenario
+        ? Number((targetContractKw + (activeShortfallScenario.expected_overshoot_kw ?? 0)).toFixed(2))
+        : null;
+    $: scenarioPredictedPeakP90 = targetContractKw !== null && activeShortfallScenario
+        ? Number((targetContractKw + (activeShortfallScenario.p90_overshoot_kw ?? 0)).toFixed(2))
+        : null;
+    $: scenarioP50 = predictionDistribution.length
+        ? Number(percentile(predictionDistribution, 50).toFixed(2))
+        : null;
+    $: scenarioOverageProbability = targetContractKw !== null && predictionDistribution.length
+        ? Number(
+            (
+                (predictionDistribution.filter(value => Number.isFinite(value) && value > targetContractKw).length /
+                    predictionDistribution.length) *
+                100
+            ).toFixed(2)
+        )
+        : null;
     $: shortfallDailyProjection = normalizeShortfallProjection(activeShortfallScenario?.daily_projection);
     $: overfitSignal = computeOverfitSignal(sessionSeries, shortfallDailyProjection);
 
@@ -1687,6 +1789,30 @@
                             >
                         </div>
                         <div class="summary-grid">
+                            {#if scenarioOverageProbability !== null}
+                                <div class="summary-metric">
+                                    <span>예측 분포 초과확률</span>
+                                    <strong>{scenarioOverageProbability.toFixed(1)}%</strong>
+                                </div>
+                            {/if}
+                            {#if scenarioP50 !== null}
+                                <div class="summary-metric">
+                                    <span>예측 피크 P50</span>
+                                    <strong>{scenarioP50}kW</strong>
+                                </div>
+                            {/if}
+                            {#if scenarioPredictedPeakAvg !== null}
+                                <div class="summary-metric">
+                                    <span>계약선 기준 예측 피크(평균)</span>
+                                    <strong>{scenarioPredictedPeakAvg}kW</strong>
+                                </div>
+                            {/if}
+                            {#if scenarioPredictedPeakP90 !== null}
+                                <div class="summary-metric">
+                                    <span>계약선 기준 예측 피크(P90)</span>
+                                    <strong>{scenarioPredictedPeakP90}kW</strong>
+                                </div>
+                            {/if}
                             {#if isManualOvershoot}
                                 <div class="summary-metric">
                                     <span>여유 확률 (낭비 가능성)</span>
